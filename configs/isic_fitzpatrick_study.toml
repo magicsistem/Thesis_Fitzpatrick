@@ -1,0 +1,125 @@
+# ISIC-Fitzpatrick study configuration
+#
+# This configuration defines the first experimental cohort.
+# It is intentionally conservative:
+# - use dermoscopic images only
+# - use diagnosis_1 for an initial binary task
+# - exclude indeterminate cases
+# - split by patient_id to avoid leakage
+# - evaluate performance by Fitzpatrick skin type
+
+[project]
+name = "Thesis_Fitzpatrick"
+study_id = "isic_fitzpatrick_dermoscopic_binary_v1"
+description = "Fitzpatrick-aware dermoscopic skin lesion analysis using ISIC Archive metadata."
+
+[references]
+isic_api_docs = "https://api.isic-archive.com/api/docs/swagger/"
+isic_cli_repo = "https://github.com/ImageMarkup/isic-cli"
+
+[paths]
+raw_metadata_csv = "data/raw/isic_fitzpatrick_metadata_full.csv"
+audit_output_dir = "reports/tables/isic_metadata_audit"
+cohort_output_csv = "data/interim/isic_fitzpatrick_dermoscopic_binary_v1.csv"
+
+[isic_query]
+fitzpatrick_search = "fitzpatrick_skin_type:I OR fitzpatrick_skin_type:II OR fitzpatrick_skin_type:III OR fitzpatrick_skin_type:IV OR fitzpatrick_skin_type:V OR fitzpatrick_skin_type:VI"
+fitzpatrick_types = ["I", "II", "III", "IV", "V", "VI"]
+
+[cohort]
+include_image_type = ["dermoscopic"]
+label_column = "diagnosis_1"
+include_labels = ["Benign", "Malignant"]
+exclude_labels = ["Indeterminate"]
+task_type = "binary_classification"
+negative_label = "Benign"
+positive_label = "Malignant"
+
+# Required columns for cohort construction.
+required_columns = [
+  "isic_id",
+  "fitzpatrick_skin_type",
+  "image_type",
+  "diagnosis_1",
+  "diagnosis_2",
+  "diagnosis_3",
+  "diagnosis_confirm_type",
+  "copyright_license",
+  "attribution",
+  "patient_id",
+  "lesion_id",
+  "sex",
+  "age_approx",
+  "anatom_site_1",
+  "pixels_x",
+  "pixels_y"
+]
+
+[fitzpatrick_analysis]
+primary_grouping = "six_type"
+six_type_groups = ["I", "II", "III", "IV", "V", "VI"]
+
+# Secondary grouping for fairness summaries.
+# This is not a biological claim; it is only an analysis grouping.
+lighter_skin_group = ["I", "II", "III"]
+darker_skin_group = ["IV", "V", "VI"]
+
+[leakage_control]
+split_level = "patient_id"
+secondary_id_check = "lesion_id"
+rationale = "Multiple images may belong to the same patient or lesion, so patient-level splitting is required before modeling."
+
+[segmentation]
+enabled = true
+initial_mode = "pilot_only"
+candidate_models = ["SAM", "MedSAM", "SAMed", "SAM-Med-style"]
+mask_validation_required = true
+use_generated_masks_for_training_without_validation = false
+notes = "Segmentation masks must be visually and quantitatively validated before downstream classification."
+
+[classification]
+baseline_input = "original_dermoscopic_image"
+segmented_input_candidates = [
+  "lesion_crop",
+  "masked_lesion",
+  "background_attenuated_image"
+]
+primary_metrics = [
+  "balanced_accuracy",
+  "macro_f1",
+  "auroc",
+  "auprc",
+  "sensitivity",
+  "specificity"
+]
+stratified_metrics = [
+  "fitzpatrick_skin_type",
+  "lighter_vs_darker_group",
+  "sex",
+  "anatom_site_1",
+  "attribution"
+]
+
+[licenses]
+allow_cc_by = true
+allow_cc_0 = true
+
+# CC-BY-NC is acceptable for non-commercial academic research,
+# but should be tracked separately in reports.
+allow_cc_by_nc = true
+track_license_in_outputs = true
+
+[exclusions]
+exclude_missing_fitzpatrick = true
+exclude_missing_patient_id = true
+exclude_missing_label = true
+exclude_non_dermoscopic = true
+exclude_indeterminate = true
+
+[reporting]
+generate_cohort_summary = true
+generate_fitzpatrick_tables = true
+generate_label_tables = true
+generate_source_tables = true
+generate_license_tables = true
+generate_patient_lesion_summary = true
