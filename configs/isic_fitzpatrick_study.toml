@@ -123,3 +123,37 @@ generate_label_tables = true
 generate_source_tables = true
 generate_license_tables = true
 generate_patient_lesion_summary = true
+
+[sensor]
+name = "Arducam 5MP Wide Angle USB Camera"
+sensor_model = "OV5648"
+sensor_size = "1/4 inch"
+native_width = 2592
+native_height = 1944
+native_aspect_ratio = "4:3"
+connection = "USB 2.0 UVC"
+notes = "Target acquisition sensor for the dermatoscope prototype. Native still/video resolution is 5MP 2592x1944."
+
+[preprocessing]
+preserve_aspect_ratio = true
+padding_enabled = true
+padding_mode = "constant"
+padding_value = 0
+
+# Sensor-standardized version: useful to simulate the acquisition resolution.
+
+sensor_target_width = 2592
+sensor_target_height = 1944
+
+# Lightweight version: useful for CPU/GPU-constrained segmentation inference.
+
+inference_target_width = 1024
+inference_target_height = 768
+
+resized_sensor_image_dir = "data/processed/isic_segmentation_pilot_resized_sensor"
+resized_inference_image_dir = "data/processed/isic_segmentation_pilot_resized_inference"
+
+[preprocessing.rationale]
+sensor_resolution = "The planned prototype camera uses a 5MP OV5648 sensor with native 2592x1944 resolution."
+aspect_ratio = "Images should be resized while preserving aspect ratio and padded to avoid distorting lesion morphology."
+inference_resolution = "A 1024x768 version is retained for practical segmentation inference on limited local hardware."
