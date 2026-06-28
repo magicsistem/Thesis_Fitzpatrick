@@ -1,0 +1,63 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.ipynb_checkpoints/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Environments
+.venv/
+.env/
+*.env
+conda-meta/
+
+# Data: keep folders, not large datasets
+data/raw/*
+data/interim/*
+data/processed/*
+data/external/*
+!data/raw/.gitkeep
+!data/interim/.gitkeep
+!data/processed/.gitkeep
+!data/external/.gitkeep
+
+# Results: keep folders, not heavy outputs
+results/*
+reports/figures/*
+reports/tables/*
+!results/.gitkeep
+!reports/figures/.gitkeep
+!reports/tables/.gitkeep
+
+# Model checkpoints / weights
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+checkpoints/
+weights/
+models/
+
+# Images and archives
+*.jpg
+*.jpeg
+*.png
+*.tif
+*.tiff
+*.bmp
+*.webp
+*.zip
+*.tar
+*.tar.gz
+*.7z
+
+# Logs
+logs/
+*.log
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.vscode/
