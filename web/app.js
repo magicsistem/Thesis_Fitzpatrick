@@ -134,7 +134,7 @@ function renderSlide() {
     <p class="runtime"><strong>Rendimiento por imagen:</strong> ${runtimeDetails(result.runtime)}</p>
     <p class="stats">${stats
       ? `Píxeles de piel: ${stats.pixel_count} · RGB mediana: ${stats.rgb_median.join(", ")} · Lab mediana: ${stats.lab_median.join(", ")} · ITA: ${stats.ita_degrees}°`
-      : result.message ?? "Este modelo necesita un adaptador y su checkpoint antes de inferir."}</p>`;
+      : result.stats?.skin_colour_error ?? result.message ?? "Este modelo necesita un adaptador y su checkpoint antes de inferir."}</p>`;
 }
 
 async function runReview() {

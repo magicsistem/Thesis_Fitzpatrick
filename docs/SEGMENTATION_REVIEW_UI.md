@@ -21,10 +21,10 @@ The first five models to integrate and test are:
 1. AViT.
 2. UltraLight VM-UNet.
 3. BA-Transformer.
-4. ISCF.
+4. U-Net/ResNet34 (ISIC 2018).
 5. UCM-Net.
 
-SkinMamba, EGE-UNet, MALUNet, MHorUNet, and MobileSAM are secondary
+ISCF, SkinMamba, EGE-UNet, MALUNet, and MobileSAM are secondary
 comparators. MobileSAM remains a prompt-based baseline and must not be mixed
 conceptually with the prompt-free supervised segmenters. TMUNet, Attention
 DeepLabv3+, and BCDU-Net were removed from the live catalogue after GitHub
@@ -177,6 +177,43 @@ bootstrap parameters remain in the inference model and no extra ResNet download
 is required. Before that strict load, the adapter also removes the `module.`
 prefix produced by the original multi-GPU training, matching the official
 checkpoint loader.
+
+## U-Net/ResNet34 on CPU
+
+The fourth runnable comparator is a conventional U-Net with a ResNet34 encoder,
+trained by a community project on ISIC 2018 Task 1 at 256 × 256. Its MIT-licensed
+training repository reports Dice 0.8982 and IoU 0.8293 on an 80/20 split. These
+are author-reported validation values, not an independent evaluation and not a
+new peer-reviewed architecture; the project uses it as a transparent classical
+baseline. The 94 MB checkpoint is fetched from an immutable Hugging Face model
+revision and verified with SHA-256.
+
+Install the single additional runtime dependency into the existing CPU
+environment, then download the checkpoint:
+
+```bash
+conda run --no-capture-output -n thesis-avit \
+  python -m pip install --no-deps segmentation-models-pytorch==0.5.0
+conda run --no-capture-output -n thesis-avit \
+  python scripts/setup_unet_resnet34.py
+```
+
+`--no-deps` deliberately preserves the already verified CPU builds of PyTorch,
+Torchvision, timm, Hugging Face Hub, and safetensors in `thesis-avit`.
+
+ISCF remains in the catalogue because it is a relevant research comparator,
+but it is not marked runnable: on 2026-07-16 both official Google Drive weight
+links rejected automated retrieval. The interface will not pretend those
+weights are available.
+
+## Empty clean-skin masks
+
+Some failed segmenters label the entire field of view as lesion. In that case
+there are legitimately no candidate clean-skin pixels. The server still saves
+and displays the original image, lesion mask, empty clean-skin mask, and runtime
+metrics. It records colour statistics as unavailable instead of aborting the
+whole multi-model request. It never fabricates RGB, Lab, ITA, or Fitzpatrick
+values from an empty selection.
 
 ## Runtime measurements
 

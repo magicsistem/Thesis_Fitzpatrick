@@ -184,12 +184,23 @@ def result_payload(
     image = Image.open(image_path).convert("RGB")
     lesion = normalize_binary_mask(Image.open(lesion_path), image.size)
     clean_skin, metadata = build_clean_skin_mask(image, lesion)
-    stats = measure_skin_colour(image, clean_skin)
     save_binary_mask(lesion, lesion_path)
     save_binary_mask(clean_skin, skin_path)
+    try:
+        stats = measure_skin_colour(image, clean_skin)
+        skin_colour = stats.to_dict()
+        skin_colour_error = None
+    except ValueError:
+        skin_colour = None
+        skin_colour_error = (
+            "La predicción no dejó píxeles válidos de piel limpia; "
+            "las estadísticas de color no están disponibles para este resultado."
+        )
     stats_payload = {
         "postprocessing": metadata,
-        "skin_colour": stats.to_dict(),
+        "skin_colour": skin_colour,
+        "skin_colour_available": skin_colour is not None,
+        "skin_colour_error": skin_colour_error,
         "warning": "Fitzpatrick no se deduce únicamente a partir del color de la imagen.",
     }
     stats_path.write_text(json.dumps(stats_payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")

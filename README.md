@@ -41,7 +41,9 @@ lesion mask, and a derived clean-skin mask for colour measurement. Results are
 selected by model first and then reviewed image by image. The model cards expose
 year, declared license, GitHub source, and description. Once an adapter is
 connected, results also report per-image and average execution time, CPU use,
-and peak RAM.
+and peak RAM. A model that predicts the whole image as lesion no longer aborts
+multi-model review: its masks remain visible and its unavailable skin-colour
+statistics are reported explicitly.
 
 ```bash
 python scripts/serve_segmentation_review.py

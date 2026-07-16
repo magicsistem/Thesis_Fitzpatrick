@@ -91,6 +91,25 @@ class ReviewServerTests(unittest.TestCase):
             self.assertTrue((lesion_path.parent / "clean_skin_mask.png").is_file())
             self.assertTrue((lesion_path.parent / "colour_stats.json").is_file())
 
+    def test_full_lesion_mask_keeps_result_ready_without_skin_statistics(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            image_path = root / "input.jpg"
+            Image.fromarray(np.full((32, 32, 3), [120, 85, 65], dtype=np.uint8)).save(image_path)
+            results = root / "results"
+            lesion_path = results / "model" / "image" / "lesion_mask.png"
+            lesion_path.parent.mkdir(parents=True)
+            Image.fromarray(np.full((32, 32), 255, dtype=np.uint8)).save(lesion_path)
+
+            with patch.object(review, "RESULTS_DIR", results):
+                payload = review.result_payload("model", "image", image_path)
+
+            self.assertEqual(payload["status"], "ready")
+            self.assertIsNone(payload["stats"]["skin_colour"])
+            self.assertFalse(payload["stats"]["skin_colour_available"])
+            self.assertIn("no dejó píxeles", payload["stats"]["skin_colour_error"])
+            self.assertTrue((lesion_path.parent / "clean_skin_mask.png").is_file())
+
     def test_adapter_collects_runtime_metrics(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             lesion_path = Path(directory) / "lesion_mask.png"

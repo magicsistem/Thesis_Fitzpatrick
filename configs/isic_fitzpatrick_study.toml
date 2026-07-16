@@ -76,12 +76,12 @@ candidate_models = [
   "AViT",
   "UltraLight VM-UNet",
   "BA-Transformer",
-  "ISCF",
+  "U-Net/ResNet34 (ISIC 2018)",
   "UCM-Net",
+  "ISCF",
   "SkinMamba",
   "EGE-UNet",
   "MALUNet",
-  "MHorUNet",
   "MobileSAM baseline"
 ]
 mask_validation_required = true
