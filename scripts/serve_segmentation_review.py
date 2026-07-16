@@ -137,12 +137,15 @@ def _runtime_metrics(start: float, peak_rss_kb: int, before: resource.struct_rus
         (after.ru_utime + after.ru_stime) - (before.ru_utime + before.ru_stime),
     )
     logical_cpus = os.cpu_count() or 1
-    single_core_percent = cpu_seconds / wall_seconds * 100.0
+    effective_cores = min(cpu_seconds / wall_seconds, float(logical_cpus))
+    single_core_percent = effective_cores * 100.0
+    system_capacity_percent = min(effective_cores / logical_cpus * 100.0, 100.0)
     return {
         "wall_seconds": round(wall_seconds, 4),
         "cpu_seconds": round(cpu_seconds, 4),
+        "effective_cpu_cores": round(effective_cores, 4),
         "cpu_percent_single_core_equivalent": round(single_core_percent, 2),
-        "cpu_percent_system_capacity": round(single_core_percent / logical_cpus, 2),
+        "cpu_percent_system_capacity": round(system_capacity_percent, 2),
         "logical_cpu_count": logical_cpus,
         "peak_ram_mb": round(peak_rss_kb / 1024.0, 2),
         "sampling_interval_seconds": 0.05,
@@ -174,6 +177,16 @@ def benchmark_summaries(results: list[dict]) -> list[dict]:
             ),
             "average_cpu_percent_system_capacity": round(
                 sum(item["cpu_percent_system_capacity"] for item in runtimes) / len(runtimes), 2
+            ),
+            "average_effective_cpu_cores": round(
+                sum(
+                    item.get(
+                        "effective_cpu_cores",
+                        item["cpu_percent_single_core_equivalent"] / 100.0,
+                    )
+                    for item in runtimes
+                ) / len(runtimes),
+                4,
             ),
             "peak_ram_mb_max": round(max(item["peak_ram_mb"] for item in runtimes), 2),
         })

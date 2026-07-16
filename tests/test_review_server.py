@@ -87,6 +87,7 @@ class ReviewServerTests(unittest.TestCase):
             self.assertTrue(success)
             self.assertIsNotNone(metrics)
             self.assertIn("wall_seconds", metrics)
+            self.assertIn("effective_cpu_cores", metrics)
             self.assertIn("cpu_percent_single_core_equivalent", metrics)
             self.assertIn("peak_ram_mb", metrics)
 
@@ -103,6 +104,7 @@ class ReviewServerTests(unittest.TestCase):
         ])
         self.assertEqual(summaries[0]["images_timed"], 2)
         self.assertEqual(summaries[0]["average_wall_seconds"], 2.0)
+        self.assertEqual(summaries[0]["average_effective_cpu_cores"], 0.5)
         self.assertEqual(summaries[0]["peak_ram_mb_max"], 100.0)
 
     def test_adapter_expands_placeholders_inside_arguments(self) -> None:

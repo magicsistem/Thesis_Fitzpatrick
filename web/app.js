@@ -61,17 +61,19 @@ function renderSummaries() {
   container.innerHTML = `
     <h3>Resumen de rendimiento</h3>
     <div class="table-wrap"><table>
-      <thead><tr><th>Modelo</th><th>Imágenes</th><th>Tiempo total</th><th>Promedio/imagen</th><th>CPU promedio</th><th>CPU del sistema</th><th>RAM máxima</th></tr></thead>
+      <thead><tr><th>Modelo</th><th>Imágenes</th><th>Tiempo total</th><th>Promedio/imagen</th><th>CPU usada</th><th>Núcleos efectivos</th><th>RAM máxima</th></tr></thead>
       <tbody>${state.summaries.map((summary) => {
         const model = state.models.find((item) => item.id === summary.model_id);
-        return `<tr><td>${model?.name ?? summary.model_id}</td><td>${summary.images_timed}</td><td>${summary.total_wall_seconds} s</td><td>${summary.average_wall_seconds} s</td><td>${summary.average_cpu_percent_single_core_equivalent}% de un núcleo</td><td>${summary.average_cpu_percent_system_capacity}%</td><td>${summary.peak_ram_mb_max} MB</td></tr>`;
+        const effectiveCores = summary.average_effective_cpu_cores ?? (summary.average_cpu_percent_single_core_equivalent / 100);
+        return `<tr><td>${model?.name ?? summary.model_id}</td><td>${summary.images_timed}</td><td>${summary.total_wall_seconds} s</td><td>${summary.average_wall_seconds} s</td><td>${summary.average_cpu_percent_system_capacity}% del equipo</td><td>${effectiveCores.toFixed(2)}</td><td>${summary.peak_ram_mb_max} MB</td></tr>`;
       }).join("")}</tbody>
     </table></div>`;
 }
 
 function runtimeDetails(runtime) {
   if (!runtime) return "Sin medición de recursos para esta máscara.";
-  return `Tiempo: ${runtime.wall_seconds} s · CPU: ${runtime.cpu_seconds} s (${runtime.cpu_percent_single_core_equivalent}% de un núcleo; ${runtime.cpu_percent_system_capacity}% del sistema) · RAM máxima: ${runtime.peak_ram_mb} MB`;
+  const effectiveCores = runtime.effective_cpu_cores ?? (runtime.cpu_percent_single_core_equivalent / 100);
+  return `Tiempo: ${runtime.wall_seconds} s · CPU: ${runtime.cpu_seconds} s (${runtime.cpu_percent_system_capacity}% del equipo; ${effectiveCores.toFixed(2)} núcleos efectivos) · RAM máxima: ${runtime.peak_ram_mb} MB`;
 }
 
 function renderSlide() {

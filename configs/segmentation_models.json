@@ -72,11 +72,27 @@
       "recommended": true,
       "framework": "PyTorch/Mamba",
       "datasets": ["ISIC 2017", "ISIC 2018", "PH2"],
-      "checkpoint_status": "must_verify",
-      "integration_status": "adapter_required",
+      "checkpoint_status": "public_verified_dataset_unspecified",
+      "integration_status": "ready_after_setup",
       "repository": "https://github.com/wurenkai/UltraLight-VM-UNet",
-      "description": "Modelo de 0.049 M de parámetros orientado a dispositivos limitados; es muy ligero, aunque sus dependencias Mamba siguen siendo complejas.",
-      "adapter_command": null
+      "description": "Modelo de 0.049 M de parámetros con checkpoint público verificado. El autor lo identifica como entrenado en lesiones cutáneas, pero no especifica cuál conjunto ISIC produjo ese archivo; aquí usa una recurrencia Mamba equivalente escrita en PyTorch CPU.",
+      "adapter_command": [
+        "{conda}",
+        "run",
+        "--no-capture-output",
+        "-n",
+        "thesis-avit",
+        "python",
+        "{repo_root}/scripts/adapters/ultralight_vm_unet.py",
+        "--image",
+        "{image}",
+        "--output",
+        "{lesion_mask}",
+        "--source",
+        "{repo_root}/models/ultralight-vm-unet/source",
+        "--checkpoint",
+        "{repo_root}/models/ultralight-vm-unet/checkpoints/UltraLight_VM_UNet.pth"
+      ]
     },
     {
       "id": "ucm-net",

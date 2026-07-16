@@ -96,14 +96,35 @@ reported time intentionally includes model loading. Inference uses the official
 224 × 224 ImageNet-normalized evaluation preprocessing; the binary mask is then
 resized to the original image dimensions with nearest-neighbour interpolation.
 
+## UltraLight VM-UNet on CPU
+
+The second runnable model reuses the `thesis-avit` environment. Its official
+MIT-licensed source is pinned to commit
+`27e44181b3cd5b0b2ab3ad1e3ddb8cad67368fbd`. The 229 KB checkpoint linked by
+the author is verified before use. The publication repository depends on a
+CUDA Mamba kernel, so this project evaluates the same Mamba-1 state recurrence
+with a plain PyTorch CPU reference implementation and unchanged parameter
+names.
+
+```bash
+conda run --no-capture-output -n thesis-avit \
+  python scripts/setup_ultralight_vm_unet.py
+```
+
+The author describes the downloadable file only as weights trained on skin
+lesions and does not identify ISIC 2017 versus ISIC 2018 in the download issue.
+Results from that checkpoint must therefore retain `dataset unspecified` as a
+provenance limitation.
+
 ## Runtime measurements
 
 For every adapter invocation, the server records:
 
 - wall time for the individual image;
 - child-process CPU seconds;
-- CPU percentage expressed as the equivalent use of one logical core;
-- CPU percentage normalized by the machine's total logical-core capacity;
+- CPU percentage normalized to the machine's full logical-core capacity
+  (0–100%);
+- effective logical cores used on average, which may be greater than one;
 - approximate peak resident memory for the adapter process tree.
 
 The Linux `/proc` filesystem is sampled every 0.05 seconds for memory. RAM is
