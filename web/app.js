@@ -1,4 +1,7 @@
-const state = { models: [], images: [], results: [], summaries: [], slide: 0 };
+const state = {
+  models: [], images: [], results: [], summaries: [], pool: {},
+  slide: 0, activeModelId: ""
+};
 const $ = (selector) => document.querySelector(selector);
 
 function checkedValues(selector) {
@@ -24,24 +27,44 @@ function renderModels() {
   document.querySelectorAll(".model-check").forEach((input) => input.addEventListener("change", updateCounts));
 }
 
-function renderImages() {
-  $("#images").innerHTML = state.images.map((image) => `
-    <label class="image-card">
-      <input class="image-check" type="checkbox" value="${image.id}">
-      <img src="${image.url}" alt="${image.id}" loading="lazy">
-      <span title="${image.id}">${image.id}</span>
-    </label>`).join("");
-  const range = $("#image-limit");
-  range.max = Math.max(1, state.images.length);
-  range.value = Math.min(10, Math.max(1, state.images.length));
-  $("#limit-value").textContent = range.value;
-  document.querySelectorAll(".image-check").forEach((input) => input.addEventListener("change", updateCounts));
+function renderPoolStatus() {
+  const counts = state.pool?.fitzpatrick_counts ?? {};
+  const distribution = ["I", "II", "III", "IV", "V", "VI"]
+    .map((type) => `${type}: ${counts[type] ?? 0}`).join(" · ");
+  const metadata = state.pool?.metadata_available ? "metadatos disponibles" : "falta el CSV de metadatos";
+  $("#pool-status").textContent = `${state.pool?.total_local_images ?? 0} imágenes locales · ${metadata} · ${distribution}`;
 }
 
-function applyImageLimit() {
-  const limit = Number($("#image-limit").value);
-  document.querySelectorAll(".image-check").forEach((input, index) => { input.checked = index < limit; });
+function renderImages(selectAll = true) {
+  $("#images").innerHTML = state.images.map((image) => `
+    <label class="image-card">
+      <input class="image-check" type="checkbox" value="${image.id}" ${selectAll ? "checked" : ""}>
+      <img src="${image.url}" alt="${image.id}" loading="lazy">
+      <span title="${image.id}">${image.id}</span>
+      <small>Fitzpatrick ${image.fitzpatrick_skin_type || "sin dato"}${image.diagnosis_1 ? ` · ${image.diagnosis_1}` : ""}</small>
+    </label>`).join("");
+  document.querySelectorAll(".image-check").forEach((input) => input.addEventListener("change", updateCounts));
+  renderPoolStatus();
   updateCounts();
+}
+
+async function sampleImages() {
+  const total = Number($("#sample-total").value);
+  const seed = Number($("#sample-seed").value);
+  $("#pool-status").textContent = "Construyendo muestra equilibrada…";
+  const response = await fetch("/api/sample", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ total, seed })
+  });
+  const payload = await response.json();
+  if (!response.ok) {
+    $("#pool-status").textContent = payload.error;
+    return;
+  }
+  state.images = payload.images;
+  state.pool = payload.pool;
+  renderImages(true);
+  $("#pool-status").textContent += ` · muestra: ${payload.per_type} por tipo · semilla ${payload.seed}`;
 }
 
 function resultPanel(title, url, alt) {
@@ -76,16 +99,33 @@ function runtimeDetails(runtime) {
   return `Tiempo: ${runtime.wall_seconds} s · CPU: ${runtime.cpu_seconds} s (${runtime.cpu_percent_system_capacity}% del equipo; ${effectiveCores.toFixed(2)} núcleos efectivos) · RAM máxima: ${runtime.peak_ram_mb} MB`;
 }
 
+function activeResults() {
+  return state.results.filter((result) => result.model_id === state.activeModelId);
+}
+
+function populateResultModels() {
+  const available = [...new Set(state.results.map((result) => result.model_id))];
+  $("#result-model").innerHTML = available.map((modelId) => {
+    const model = state.models.find((item) => item.id === modelId);
+    return `<option value="${modelId}">${model?.name ?? modelId}</option>`;
+  }).join("");
+  state.activeModelId = available[0] ?? "";
+  $("#result-model").value = state.activeModelId;
+}
+
 function renderSlide() {
-  if (!state.results.length) return;
-  const result = state.results[state.slide];
+  const results = activeResults();
+  if (!results.length) return;
+  const result = results[state.slide];
   const model = state.models.find((item) => item.id === result.model_id);
-  $("#slide-position").textContent = `${state.slide + 1} / ${state.results.length}`;
+  $("#slide-position").textContent = `${state.slide + 1} / ${results.length}`;
   $("#previous").disabled = state.slide === 0;
-  $("#next").disabled = state.slide === state.results.length - 1;
+  $("#next").disabled = state.slide === results.length - 1;
   const stats = result.stats?.skin_colour;
+  const imageMetadata = result.image_metadata ?? {};
   $("#slide").innerHTML = `
     <h3>${model?.name ?? result.model_id} · ${result.image_id}</h3>
+    <p class="result-metadata">Fitzpatrick ${imageMetadata.fitzpatrick_skin_type || "sin dato"}${imageMetadata.diagnosis_1 ? ` · ${imageMetadata.diagnosis_1}` : ""}${imageMetadata.image_type ? ` · ${imageMetadata.image_type}` : ""}</p>
     <div class="triptych">
       ${resultPanel("Imagen original", result.original_url, "Imagen original")}
       ${resultPanel("Máscara 1: lesión", result.lesion_mask_url, "Máscara binaria de lesión")}
@@ -110,6 +150,7 @@ async function runReview() {
   state.results = payload.results;
   state.summaries = payload.summaries ?? [];
   state.slide = 0;
+  populateResultModels();
   $("#status").textContent = `${state.results.filter((r) => r.status === "ready").length} resultados listos de ${state.results.length}.`;
   $("#carousel").hidden = false;
   renderSummaries();
@@ -119,13 +160,13 @@ async function runReview() {
 async function initialize() {
   const response = await fetch("/api/state");
   Object.assign(state, await response.json());
-  renderModels(); renderImages(); updateCounts(); applyImageLimit();
+  renderModels(); renderImages(true); updateCounts();
 }
 
-$("#image-limit").addEventListener("input", (event) => { $("#limit-value").textContent = event.target.value; });
-$("#select-visible").addEventListener("click", applyImageLimit);
+$("#sample-images").addEventListener("click", () => sampleImages().catch((error) => { $("#pool-status").textContent = error.message; }));
 $("#clear-images").addEventListener("click", () => { document.querySelectorAll(".image-check").forEach((i) => { i.checked = false; }); updateCounts(); });
 $("#run").addEventListener("click", runReview);
 $("#previous").addEventListener("click", () => { state.slide -= 1; renderSlide(); });
 $("#next").addEventListener("click", () => { state.slide += 1; renderSlide(); });
+$("#result-model").addEventListener("change", (event) => { state.activeModelId = event.target.value; state.slide = 0; renderSlide(); });
 initialize().catch((error) => { $("#status").textContent = `No se pudo iniciar: ${error.message}`; });

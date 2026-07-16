@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import argparse
+import csv
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import json
 import mimetypes
 import os
 from pathlib import Path
 import resource
+import random
 import shutil
 import subprocess
 import sys
@@ -30,9 +32,16 @@ from thesis_fitzpatrick.masks import (  # noqa: E402
 
 WEB_DIR = REPO_ROOT / "web"
 MODEL_CONFIG = REPO_ROOT / "configs" / "segmentation_models.json"
-INPUT_DIR = REPO_ROOT / "data" / "processed" / "isic_segmentation_pilot_resized_inference"
+PILOT_INPUT_DIR = REPO_ROOT / "data" / "processed" / "isic_segmentation_pilot_resized_inference"
+FITZPATRICK_INPUT_DIR = REPO_ROOT / "data" / "raw" / "isic_fitzpatrick_images"
+INPUT_ROOTS = {
+    "pilot": PILOT_INPUT_DIR,
+    "fitzpatrick": FITZPATRICK_INPUT_DIR,
+}
+METADATA_CSV = REPO_ROOT / "data" / "raw" / "isic_fitzpatrick_metadata_full.csv"
 RESULTS_DIR = REPO_ROOT / "results" / "segmentation_benchmark"
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp"}
+FITZPATRICK_TYPES = ("I", "II", "III", "IV", "V", "VI")
 
 
 def load_models() -> list[dict]:
@@ -40,14 +49,112 @@ def load_models() -> list[dict]:
     return sorted(payload["models"], key=lambda model: model["priority"])
 
 
+def load_image_metadata() -> dict[str, dict]:
+    if not METADATA_CSV.is_file():
+        return {}
+    metadata = {}
+    with METADATA_CSV.open("r", encoding="utf-8-sig", newline="") as stream:
+        for row in csv.DictReader(stream):
+            image_id = str(row.get("isic_id", "")).strip()
+            if not image_id or image_id in metadata:
+                continue
+            metadata[image_id] = {
+                "fitzpatrick_skin_type": str(row.get("fitzpatrick_skin_type", "")).strip(),
+                "diagnosis_1": str(row.get("diagnosis_1", "")).strip(),
+                "image_type": str(row.get("image_type", "")).strip(),
+                "copyright_license": str(row.get("copyright_license", "")).strip(),
+            }
+    return metadata
+
+
 def list_images() -> list[dict]:
-    if not INPUT_DIR.exists():
-        return []
+    metadata = load_image_metadata()
+    images = []
+    seen = set()
+    for source, root in INPUT_ROOTS.items():
+        if not root.exists():
+            continue
+        for path in sorted(root.iterdir()):
+            if not path.is_file() or path.suffix.lower() not in IMAGE_SUFFIXES:
+                continue
+            image_id = path.stem
+            if image_id in seen:
+                continue
+            seen.add(image_id)
+            details = metadata.get(image_id, {})
+            images.append({
+                "id": image_id,
+                "filename": path.name,
+                "source": source,
+                "url": f"/files/input/{source}/{path.name}",
+                "fitzpatrick_skin_type": details.get("fitzpatrick_skin_type", ""),
+                "diagnosis_1": details.get("diagnosis_1", ""),
+                "image_type": details.get("image_type", ""),
+                "copyright_license": details.get("copyright_license", ""),
+            })
+    return images
+
+
+def image_path(record: dict) -> Path:
+    source = record.get("source", "pilot")
+    if source not in INPUT_ROOTS:
+        raise ValueError(f"Origen de imagen desconocido: {source}")
+    return require_within(
+        INPUT_ROOTS[source] / record["filename"],
+        (INPUT_ROOTS[source],),
+        "Input image",
+    )
+
+
+def pool_summary(images: list[dict]) -> dict:
+    counts = {
+        fitzpatrick_type: sum(
+            image.get("fitzpatrick_skin_type") == fitzpatrick_type for image in images
+        )
+        for fitzpatrick_type in FITZPATRICK_TYPES
+    }
+    return {
+        "total_local_images": len(images),
+        "eligible_fitzpatrick_images": sum(counts.values()),
+        "fitzpatrick_counts": counts,
+        "metadata_available": METADATA_CSV.is_file(),
+        "full_image_directory": str(FITZPATRICK_INPUT_DIR.relative_to(REPO_ROOT)),
+    }
+
+
+def stratified_sample(images: list[dict], total: int, seed: int = 42) -> list[dict]:
+    if total < len(FITZPATRICK_TYPES) or total % len(FITZPATRICK_TYPES) != 0:
+        raise ValueError("La cantidad debe ser un múltiplo de 6 y al menos 6.")
+    per_type = total // len(FITZPATRICK_TYPES)
+    selected_by_type = {}
+    for fitzpatrick_type in FITZPATRICK_TYPES:
+        candidates = sorted(
+            (
+                image for image in images
+                if image.get("fitzpatrick_skin_type") == fitzpatrick_type
+            ),
+            key=lambda image: image["id"],
+        )
+        if len(candidates) < per_type:
+            raise ValueError(
+                f"Fitzpatrick {fitzpatrick_type} solo tiene {len(candidates)} imágenes "
+                f"locales; se necesitan {per_type}."
+            )
+        selected_by_type[fitzpatrick_type] = random.Random(
+            f"{seed}:{fitzpatrick_type}"
+        ).sample(candidates, per_type)
     return [
-        {"id": path.stem, "filename": path.name, "url": f"/files/input/{path.name}"}
-        for path in sorted(INPUT_DIR.iterdir())
-        if path.is_file() and path.suffix.lower() in IMAGE_SUFFIXES
+        selected_by_type[fitzpatrick_type][index]
+        for index in range(per_type)
+        for fitzpatrick_type in FITZPATRICK_TYPES
     ]
+
+
+def initial_images(images: list[dict]) -> list[dict]:
+    try:
+        return stratified_sample(images, 12, 42)
+    except ValueError:
+        return images[:10]
 
 
 def result_payload(
@@ -55,6 +162,9 @@ def result_payload(
     image_id: str,
     image_path: Path,
     runtime: dict | None = None,
+    *,
+    original_url: str | None = None,
+    image_metadata: dict | None = None,
 ) -> dict:
     output_dir = RESULTS_DIR / model_id / image_id
     lesion_path = output_dir / "lesion_mask.png"
@@ -67,7 +177,8 @@ def result_payload(
             "image_id": image_id,
             "status": "mask_missing",
             "message": "El adaptador todavía no produjo lesion_mask.png.",
-            "original_url": f"/files/input/{image_path.name}",
+            "original_url": original_url or f"/files/input/{image_path.name}",
+            "image_metadata": image_metadata or {},
         }
 
     image = Image.open(image_path).convert("RGB")
@@ -91,11 +202,12 @@ def result_payload(
         "model_id": model_id,
         "image_id": image_id,
         "status": "ready",
-        "original_url": f"/files/input/{image_path.name}",
+        "original_url": original_url or f"/files/input/{image_path.name}",
         "lesion_mask_url": f"{base}/lesion_mask.png",
         "clean_skin_mask_url": f"{base}/clean_skin_mask.png",
         "stats": stats_payload,
         "runtime": runtime,
+        "image_metadata": image_metadata or {},
     }
 
 
@@ -282,10 +394,20 @@ class ReviewHandler(SimpleHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802
         path = unquote(urlparse(self.path).path)
         if path == "/api/state":
-            self._json({"models": load_models(), "images": list_images()})
+            images = list_images()
+            self._json({
+                "models": load_models(),
+                "images": initial_images(images),
+                "pool": pool_summary(images),
+            })
             return
         if path.startswith("/files/input/"):
-            self._serve_file(INPUT_DIR / path.removeprefix("/files/input/"), INPUT_DIR)
+            relative = path.removeprefix("/files/input/")
+            source, separator, filename = relative.partition("/")
+            if separator and source in INPUT_ROOTS:
+                self._serve_file(INPUT_ROOTS[source] / filename, INPUT_ROOTS[source])
+            else:
+                self._serve_file(PILOT_INPUT_DIR / relative, PILOT_INPUT_DIR)
             return
         if path.startswith("/files/result/"):
             self._serve_file(RESULTS_DIR / path.removeprefix("/files/result/"), RESULTS_DIR)
@@ -295,12 +417,24 @@ class ReviewHandler(SimpleHTTPRequestHandler):
         self._serve_file(WEB_DIR / path.lstrip("/"), WEB_DIR)
 
     def do_POST(self) -> None:  # noqa: N802
-        if self.path != "/api/infer":
+        if self.path not in {"/api/infer", "/api/sample"}:
             self.send_error(404)
             return
         try:
             length = int(self.headers.get("Content-Length", "0"))
             request = json.loads(self.rfile.read(length))
+            if self.path == "/api/sample":
+                images = list_images()
+                total = int(request.get("total", 12))
+                seed = int(request.get("seed", 42))
+                self._json({
+                    "images": stratified_sample(images, total, seed),
+                    "pool": pool_summary(images),
+                    "total": total,
+                    "per_type": total // len(FITZPATRICK_TYPES),
+                    "seed": seed,
+                })
+                return
             requested_models = request.get("model_ids", [])
             requested_images = request.get("image_ids", [])
             models = {model["id"]: model for model in load_models()}
@@ -317,22 +451,33 @@ class ReviewHandler(SimpleHTTPRequestHandler):
                 for image_id in requested_images:
                     if image_id not in images:
                         raise ValueError(f"Imagen desconocida: {image_id}")
-                    image_path = INPUT_DIR / images[image_id]["filename"]
+                    image_record = images[image_id]
+                    current_image_path = image_path(image_record)
                     lesion_path = RESULTS_DIR / model_id / image_id / "lesion_mask.png"
                     runtime = None
                     if not lesion_path.is_file():
-                        success, message, runtime = run_adapter(models[model_id], image_path, lesion_path)
+                        success, message, runtime = run_adapter(
+                            models[model_id], current_image_path, lesion_path
+                        )
                         if not success:
                             results.append({
                                 "model_id": model_id,
                                 "image_id": image_id,
                                 "status": "adapter_unavailable",
                                 "message": message,
-                                "original_url": f"/files/input/{image_path.name}",
+                                "original_url": image_record["url"],
                                 "runtime": runtime,
+                                "image_metadata": image_record,
                             })
                             continue
-                    results.append(result_payload(model_id, image_id, image_path, runtime))
+                    results.append(result_payload(
+                        model_id,
+                        image_id,
+                        current_image_path,
+                        runtime,
+                        original_url=image_record["url"],
+                        image_metadata=image_record,
+                    ))
             self._json({"results": results, "summaries": benchmark_summaries(results)})
         except (ValueError, json.JSONDecodeError) as exc:
             self._json({"error": str(exc)}, status=400)
@@ -347,7 +492,8 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    INPUT_DIR.mkdir(parents=True, exist_ok=True)
+    PILOT_INPUT_DIR.mkdir(parents=True, exist_ok=True)
+    FITZPATRICK_INPUT_DIR.mkdir(parents=True, exist_ok=True)
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     server = ThreadingHTTPServer((args.host, args.port), ReviewHandler)
     print(f"Segmentation review: http://{args.host}:{args.port}")

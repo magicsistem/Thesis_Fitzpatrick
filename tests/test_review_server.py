@@ -45,6 +45,26 @@ class ReviewServerTests(unittest.TestCase):
             self.assertTrue(model["license"])
             self.assertTrue(model["repository"].startswith("https://github.com/"))
             self.assertTrue(model["description"])
+        self.assertIn("pool", payload)
+
+    def test_stratified_sample_balances_six_fitzpatrick_types(self) -> None:
+        images = [
+            {"id": f"{fitzpatrick_type}-{index}", "fitzpatrick_skin_type": fitzpatrick_type}
+            for fitzpatrick_type in review.FITZPATRICK_TYPES
+            for index in range(4)
+        ]
+        first = review.stratified_sample(images, total=12, seed=17)
+        second = review.stratified_sample(images, total=12, seed=17)
+        self.assertEqual(first, second)
+        for fitzpatrick_type in review.FITZPATRICK_TYPES:
+            self.assertEqual(
+                sum(item["fitzpatrick_skin_type"] == fitzpatrick_type for item in first),
+                2,
+            )
+
+    def test_stratified_sample_requires_multiple_of_six(self) -> None:
+        with self.assertRaisesRegex(ValueError, "múltiplo de 6"):
+            review.stratified_sample([], total=10)
 
     def test_index_is_served(self) -> None:
         with urlopen(f"{self.base_url}/") as response:

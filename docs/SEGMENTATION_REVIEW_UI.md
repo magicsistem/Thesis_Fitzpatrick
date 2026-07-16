@@ -19,12 +19,12 @@ markers, rulers, gel, colour shifts, or transparent dermatoscope-tip artifacts.
 The first five models to integrate and test are:
 
 1. AViT.
-2. ISCF.
-3. SkinMamba.
-4. UltraLight VM-UNet.
+2. UltraLight VM-UNet.
+3. BA-Transformer.
+4. ISCF.
 5. UCM-Net.
 
-EGE-UNet, MALUNet, MHorUNet, HSH-UNet, and MobileSAM are secondary
+SkinMamba, EGE-UNet, MALUNet, MHorUNet, and MobileSAM are secondary
 comparators. MobileSAM remains a prompt-based baseline and must not be mixed
 conceptually with the prompt-free supervised segmenters. TMUNet, Attention
 DeepLabv3+, and BCDU-Net were removed from the live catalogue after GitHub
@@ -68,8 +68,12 @@ From the repository root with the `tesis-sam` environment active:
 python scripts/serve_segmentation_review.py --host 127.0.0.1 --port 8000
 ```
 
-Open <http://127.0.0.1:8000>. The page selects 1 to all downloaded images and
-up to 10 models. It displays a carousel with:
+Open <http://127.0.0.1:8000>. The page can create an exact Fitzpatrick-balanced
+sample from the locally downloaded full cohort. The requested total must be a
+multiple of six; 12 therefore means two images from every type I–VI. The seed
+makes the selection reproducible. Up to 10 models can be selected. In the
+results, first select one model and then move image by image within that model.
+Every slide displays:
 
 1. original image;
 2. lesion mask;
@@ -77,6 +81,33 @@ up to 10 models. It displays a carousel with:
 
 If an adapter is not configured, the interface reports that state instead of
 fabricating an inference.
+
+## Full Fitzpatrick image pool
+
+The interface joins local image filenames to
+`data/raw/isic_fitzpatrick_metadata_full.csv`. It reads images from both the
+93-image pilot and `data/raw/isic_fitzpatrick_images`, de-duplicating by ISIC
+identifier. Only local images with a valid I–VI metadata label are eligible for
+balanced sampling.
+
+To download every image listed by the audited metadata, use the `isic-api`
+environment, which contains the ISIC CLI. This can require substantial disk
+space and network time; the downloader is batch-based and skips files that are
+already complete.
+
+```bash
+conda run --no-capture-output -n isic-api \
+  python scripts/download_segmentation_pilot_images.py \
+  --manifest data/raw/isic_fitzpatrick_metadata_full.csv \
+  --output-dir data/raw/isic_fitzpatrick_images \
+  --batch-size 50 \
+  --sleep-seconds 0.5
+```
+
+The pool summary in the page reports how many local images are available for
+each Fitzpatrick type. If a requested stratum is too small, the server rejects
+the sample and states which type is missing images; it never fills the deficit
+from another type.
 
 ## AViT on CPU
 
@@ -115,6 +146,27 @@ The author describes the downloadable file only as weights trained on skin
 lesions and does not identify ISIC 2017 versus ISIC 2018 in the download issue.
 Results from that checkpoint must therefore retain `dataset unspecified` as a
 provenance limitation.
+
+## BA-Transformer on CPU
+
+The third runnable model reuses `thesis-avit`. Its official source is pinned to
+commit `d1ccdff68beac82d18c2cd64bb800e51d7afc5e1`. The published archive is
+verified before extracting `isic2016/.../best.pkl`, and the extracted checkpoint
+is verified again with SHA-256. The repository has no declared software license.
+After successful extraction and verification, the setup script removes the
+downloaded ZIP so that only the checkpoint remains on disk.
+
+```bash
+conda run --no-capture-output -n thesis-avit \
+  python scripts/setup_ba_transformer.py
+```
+
+The official README labels the Google Drive download as PH2, but the archive
+itself contains two directories named `isic2016` and the integrated checkpoint
+comes from one of them. The catalogue therefore records the checkpoint as ISIC
+2016 and preserves the README inconsistency as a provenance note. Inference
+matches the repository's 352 × 352 BGR, 0–1 preprocessing and restores the
+binary mask to the source dimensions.
 
 ## Runtime measurements
 

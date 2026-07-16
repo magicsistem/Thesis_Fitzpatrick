@@ -33,12 +33,15 @@ Do not mix all dependencies into a single environment unless explicitly justifie
 
 ## Segmentation review interface
 
-The local review interface compares up to 10 segmentation models over any
-selected subset of downloaded pilot images. Each result displays the original
-image, a lesion mask, and a derived clean-skin mask for colour measurement. The
-model cards expose year, declared license, GitHub source, and description. Once
-an adapter is connected, results also report per-image and average execution
-time, CPU use, and peak RAM.
+The local review interface compares up to 10 segmentation models over downloaded
+images joined to the complete Fitzpatrick metadata. It can build reproducible,
+balanced samples in multiples of six: for example, 12 selects exactly two local
+images of each Fitzpatrick type I–VI. Each result displays the original image, a
+lesion mask, and a derived clean-skin mask for colour measurement. Results are
+selected by model first and then reviewed image by image. The model cards expose
+year, declared license, GitHub source, and description. Once an adapter is
+connected, results also report per-image and average execution time, CPU use,
+and peak RAM.
 
 ```bash
 python scripts/serve_segmentation_review.py

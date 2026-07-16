@@ -27,12 +27,17 @@
         <div><span class="step">2</span><h2 id="images-title">Imágenes</h2></div>
         <p id="image-count">0 seleccionadas</p>
       </div>
-      <label class="range-label" for="image-limit">Seleccionar las primeras <strong id="limit-value">1</strong></label>
-      <input id="image-limit" type="range" min="1" max="1" value="1">
-      <div class="toolbar">
-        <button id="select-visible" type="button" class="secondary">Aplicar cantidad</button>
+      <div class="sample-controls">
+        <label for="sample-total">Cantidad total equilibrada
+          <input id="sample-total" type="number" min="6" step="6" value="12">
+        </label>
+        <label for="sample-seed">Semilla reproducible
+          <input id="sample-seed" type="number" min="0" step="1" value="42">
+        </label>
+        <button id="sample-images" type="button">Crear muestra I–VI</button>
         <button id="clear-images" type="button" class="secondary">Limpiar</button>
       </div>
+      <p id="pool-status" class="pool-status">Comprobando imágenes locales y metadatos…</p>
       <div id="images" class="image-grid"></div>
     </section>
 
@@ -44,6 +49,9 @@
       <p id="status" role="status">Todavía no hay resultados.</p>
       <div id="benchmark-summary" hidden></div>
       <div id="carousel" class="carousel" hidden>
+        <label class="result-model-label" for="result-model">Revisar modelo
+          <select id="result-model"></select>
+        </label>
         <div class="carousel-nav">
           <button id="previous" class="secondary" type="button">Anterior</button>
           <span id="slide-position"></span>

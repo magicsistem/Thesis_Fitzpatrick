@@ -74,14 +74,14 @@ enabled = true
 initial_mode = "pilot_only"
 candidate_models = [
   "AViT",
-  "ISCF",
-  "SkinMamba",
   "UltraLight VM-UNet",
+  "BA-Transformer",
+  "ISCF",
   "UCM-Net",
+  "SkinMamba",
   "EGE-UNet",
   "MALUNet",
   "MHorUNet",
-  "HSH-UNet",
   "MobileSAM baseline"
 ]
 mask_validation_required = true
@@ -90,8 +90,13 @@ notes = "Segmentation masks must be visually and quantitatively validated before
 
 [segmentation_benchmark]
 input_image_dir = "data/processed/isic_segmentation_pilot_resized_inference"
+full_input_image_dir = "data/raw/isic_fitzpatrick_images"
+fitzpatrick_metadata_csv = "data/raw/isic_fitzpatrick_metadata_full.csv"
 result_dir = "results/segmentation_benchmark"
 model_catalog = "configs/segmentation_models.json"
+stratified_sample_types = ["I", "II", "III", "IV", "V", "VI"]
+stratified_sample_default_total = 12
+stratified_sample_seed = 42
 required_lesion_mask_name = "lesion_mask.png"
 derived_clean_skin_mask_name = "clean_skin_mask.png"
 skin_colour_statistics = ["rgb_median", "rgb_trimmed_mean", "lab_median", "ita_degrees"]
