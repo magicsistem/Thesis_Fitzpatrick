@@ -168,6 +168,16 @@ comes from one of them. The catalogue therefore records the checkpoint as ISIC
 matches the repository's 352 × 352 BGR, 0–1 preprocessing and restores the
 binary mask to the source dimensions.
 
+The official ResNet-50 constructor contains the author's absolute cache path,
+`/home/wjc/.cache/torch/hub/checkpoints/resnet50-19c8e357.pth`. The adapter
+supplies a shape-compatible blank ResNet state only while constructing the
+network and then restores `torch.load`. Immediately afterwards it loads the
+verified full BA-Transformer checkpoint with `strict=True`, so no blank
+bootstrap parameters remain in the inference model and no extra ResNet download
+is required. Before that strict load, the adapter also removes the `module.`
+prefix produced by the original multi-GPU training, matching the official
+checkpoint loader.
+
 ## Runtime measurements
 
 For every adapter invocation, the server records:

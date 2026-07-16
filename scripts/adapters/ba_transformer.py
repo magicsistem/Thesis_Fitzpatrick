@@ -13,6 +13,7 @@ from PIL import Image, ImageOps
 
 CHECKPOINT_SHA256 = "62b4148b26b01b0b17b4125d74115ed49c507eab4d39ec8ff8e063a2f7980233"
 IMAGE_SIZE = 352
+AUTHOR_RESNET50_PATH = "/home/wjc/.cache/torch/hub/checkpoints/resnet50-19c8e357.pth"
 
 
 def sha256(path: Path) -> str:
@@ -28,6 +29,49 @@ def preprocess(image: Image.Image) -> np.ndarray:
     resized = image.resize((IMAGE_SIZE, IMAGE_SIZE), resample=Image.Resampling.BICUBIC)
     rgb = np.asarray(resized, dtype=np.float32)
     return np.ascontiguousarray(rgb[:, :, ::-1]) / 255.0
+
+
+def _blank_resnet50_state_dict() -> dict:
+    """Build a shape-compatible bootstrap state dict without a download."""
+    from torchvision.models import resnet50
+
+    return resnet50(weights=None).state_dict()
+
+
+def _construct_model(torch, model_class):
+    """Construct BAT despite the author's machine-specific ResNet path.
+
+    The official constructor insists on loading an absolute cache path from the
+    author's workstation. A blank, shape-compatible ResNet state is sufficient
+    during construction because the verified full BA checkpoint is loaded
+    strictly immediately afterwards.
+    """
+    original_load = torch.load
+
+    def portable_load(path, *args, **kwargs):
+        if str(path) == AUTHOR_RESNET50_PATH:
+            return _blank_resnet50_state_dict()
+        return original_load(path, *args, **kwargs)
+
+    torch.load = portable_load
+    try:
+        return model_class(
+            num_classes=1,
+            num_layers=50,
+            point_pred=1,
+            decoder=True,
+            transformer_type_index=0,
+        )
+    finally:
+        torch.load = original_load
+
+
+def _normalize_checkpoint_keys(state_dict: dict) -> dict:
+    """Remove the DataParallel prefix exactly as the official loader does."""
+    return {
+        key[7:] if key.startswith("module.") else key: value
+        for key, value in state_dict.items()
+    }
 
 
 def load_model(source: Path, checkpoint: Path):
@@ -54,18 +98,12 @@ def load_model(source: Path, checkpoint: Path):
     sys.path.insert(0, str(source))
     from Ours.Base_transformer import BAT
 
-    model = BAT(
-        num_classes=1,
-        num_layers=50,
-        point_pred=1,
-        decoder=True,
-        transformer_type_index=0,
-    )
+    model = _construct_model(torch, BAT)
     try:
         state_dict = torch.load(checkpoint, map_location="cpu", weights_only=True)
     except TypeError:
         state_dict = torch.load(checkpoint, map_location="cpu")
-    model.load_state_dict(state_dict, strict=True)
+    model.load_state_dict(_normalize_checkpoint_keys(state_dict), strict=True)
     model.eval()
     return torch, model
 
@@ -106,4 +144,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

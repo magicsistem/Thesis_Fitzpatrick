@@ -4,6 +4,7 @@ import hashlib
 from pathlib import Path
 import sys
 import unittest
+from unittest.mock import Mock, patch
 
 from PIL import Image
 
@@ -28,7 +29,42 @@ class BATransformerAdapterTests(unittest.TestCase):
             hashlib.sha256().digest_size * 2,
         )
 
+    def test_constructor_bypasses_author_absolute_resnet_path(self) -> None:
+        original_load = Mock(return_value={"checkpoint": "loaded"})
+
+        class FakeTorch:
+            load = original_load
+
+        class FakeBAT:
+            def __init__(self, **kwargs) -> None:
+                self.kwargs = kwargs
+                self.bootstrap = FakeTorch.load(ba_transformer.AUTHOR_RESNET50_PATH)
+
+        bootstrap = {"portable": "resnet50"}
+        with patch.object(
+            ba_transformer,
+            "_blank_resnet50_state_dict",
+            return_value=bootstrap,
+        ):
+            model = ba_transformer._construct_model(FakeTorch, FakeBAT)
+
+        self.assertEqual(model.bootstrap, bootstrap)
+        self.assertEqual(model.kwargs["num_layers"], 50)
+        self.assertIs(FakeTorch.load, original_load)
+        self.assertEqual(FakeTorch.load("real-checkpoint.pkl"), {"checkpoint": "loaded"})
+
+    def test_checkpoint_normalization_removes_data_parallel_prefix(self) -> None:
+        marker = object()
+        normalized = ba_transformer._normalize_checkpoint_keys({
+            "module.deeplab.resnet.0.weight": marker,
+            "query_positions": marker,
+        })
+        self.assertEqual(
+            set(normalized),
+            {"deeplab.resnet.0.weight", "query_positions"},
+        )
+        self.assertIs(normalized["deeplab.resnet.0.weight"], marker)
+
 
 if __name__ == "__main__":
     unittest.main()
-
