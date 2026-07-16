@@ -10,10 +10,28 @@
       "framework": "PyTorch",
       "datasets": ["ISIC 2018", "Dermofit", "SCD", "PH2"],
       "checkpoint_status": "public",
-      "integration_status": "adapter_required",
+      "integration_status": "ready_after_setup",
       "repository": "https://github.com/siyi-wind/AViT",
       "description": "Transformer moderno con pesos publicados para cuatro dominios de lesiones cutáneas; es potente, pero pesado para CPU.",
-      "adapter_command": null
+      "adapter_command": [
+        "{conda}",
+        "run",
+        "--no-capture-output",
+        "-n",
+        "thesis-avit",
+        "python",
+        "{repo_root}/scripts/adapters/avit.py",
+        "--image",
+        "{image}",
+        "--output",
+        "{lesion_mask}",
+        "--source",
+        "{repo_root}/models/avit/source",
+        "--checkpoint",
+        "{repo_root}/models/avit/checkpoints/AViT_ViT_B_ISIC_best.pth",
+        "--device",
+        "cpu"
+      ]
     },
     {
       "id": "iscf",

@@ -43,6 +43,8 @@ executed without a shell. Supported placeholders are:
 - `{image}`: absolute input-image path.
 - `{lesion_mask}`: required output path.
 - `{repo_root}`: absolute project root.
+- `{python}`: interpreter that started the review server.
+- `{conda}`: Conda executable, resolved without invoking a shell.
 
 Example after an adapter has been implemented:
 
@@ -75,6 +77,24 @@ up to 10 models. It displays a carousel with:
 
 If an adapter is not configured, the interface reports that state instead of
 fabricating an inference.
+
+## AViT on CPU
+
+AViT runs in a separate environment so that `tesis-sam` is not modified. The
+official source is pinned to commit
+`b77b01af263727b2b2cf2555a5ed9f1f48a2b4a2`; its public ISIC 2018 checkpoint
+is verified with SHA-256 before every inference.
+
+```bash
+mamba env create -f configs/environments/avit-cpu.yml
+conda run --no-capture-output -n thesis-avit python scripts/setup_avit_model.py
+```
+
+The first inference loads a 398 MB checkpoint and is slower than a warm model
+would be. Each web request currently starts an isolated adapter process, so the
+reported time intentionally includes model loading. Inference uses the official
+224 × 224 ImageNet-normalized evaluation preprocessing; the binary mask is then
+resized to the original image dimensions with nearest-neighbour interpolation.
 
 ## Runtime measurements
 

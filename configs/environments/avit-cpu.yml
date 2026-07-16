@@ -1,0 +1,14 @@
+name: thesis-avit
+channels:
+  - conda-forge
+dependencies:
+  - python=3.10
+  - pytorch
+  - torchvision
+  - numpy
+  - pillow
+  - timm
+  - einops
+  - pyyaml
+  - gdown
+

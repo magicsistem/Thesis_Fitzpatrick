@@ -105,6 +105,22 @@ class ReviewServerTests(unittest.TestCase):
         self.assertEqual(summaries[0]["average_wall_seconds"], 2.0)
         self.assertEqual(summaries[0]["peak_ram_mb_max"], 100.0)
 
+    def test_adapter_expands_placeholders_inside_arguments(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            lesion_path = root / "lesion_mask.png"
+            model = {
+                "adapter_command": [
+                    "{python}",
+                    "-c",
+                    "from PIL import Image; import sys; Image.new('L', (2, 2), 255).save(sys.argv[1])",
+                    "{repo_root}/lesion_mask.png",
+                ]
+            }
+            with patch.object(review, "REPO_ROOT", root):
+                success, _, _ = review.run_adapter(model, Path("unused.jpg"), lesion_path)
+            self.assertTrue(success)
+
 
 if __name__ == "__main__":
     unittest.main()

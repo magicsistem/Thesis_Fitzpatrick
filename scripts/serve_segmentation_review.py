@@ -9,6 +9,7 @@ import mimetypes
 import os
 from pathlib import Path
 import resource
+import shutil
 import subprocess
 import sys
 import time
@@ -191,8 +192,14 @@ def run_adapter(model: dict, image_path: Path, lesion_path: Path) -> tuple[bool,
         "{image}": str(image_path),
         "{lesion_mask}": str(lesion_path),
         "{repo_root}": str(REPO_ROOT),
+        "{python}": sys.executable,
+        "{conda}": os.environ.get("CONDA_EXE") or shutil.which("conda") or "conda",
     }
-    command = [replacements.get(token, token) for token in template]
+    command = []
+    for token in template:
+        for placeholder, value in replacements.items():
+            token = token.replace(placeholder, value)
+        command.append(token)
     before = resource.getrusage(resource.RUSAGE_CHILDREN)
     start = time.perf_counter()
     peak_rss_kb = 0
