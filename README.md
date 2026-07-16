@@ -30,3 +30,17 @@ This project will use separated environments:
 - `segmentation`: PyTorch-based segmentation experiments.
 
 Do not mix all dependencies into a single environment unless explicitly justified.
+
+## Segmentation review interface
+
+The local review interface compares up to 10 segmentation models over any
+selected subset of downloaded pilot images. Each result displays the original
+image, a lesion mask, and a derived clean-skin mask for colour measurement.
+
+```bash
+python scripts/serve_segmentation_review.py
+```
+
+Open <http://127.0.0.1:8000>. See
+[`docs/SEGMENTATION_REVIEW_UI.md`](docs/SEGMENTATION_REVIEW_UI.md) for the model
+shortlist, adapter contract, post-processing rules, and Fitzpatrick caveat.

@@ -12,6 +12,8 @@ import tomllib
 import pandas as pd
 from PIL import Image, ImageOps
 
+from _project_paths import require_within, resolve_input
+
 
 REPORT_DIR = Path("reports/tables/preprocessing_resize")
 RESIZE_MANIFEST = "resize_manifest.csv"
@@ -403,15 +405,19 @@ def write_summary(
 
 def main() -> None:
     args = parse_args()
-    config = read_config(args.config)
+    config_path = resolve_input(args.config)
+    config = read_config(config_path)
     preprocessing = validate_preprocessing_config(config)
 
-    repo_root = args.config.resolve().parent.parent
+    repo_root = config_path.parent.parent
     manifest_path = resolve_path(args.manifest, repo_root)
     input_dir = resolve_path(args.input_dir, repo_root)
     sensor_output_dir = resolve_path(preprocessing["resized_sensor_image_dir"], repo_root)
     inference_output_dir = resolve_path(preprocessing["resized_inference_image_dir"], repo_root)
     report_dir = repo_root / REPORT_DIR
+    require_within(sensor_output_dir, (repo_root / "data" / "processed",), "Sensor image output")
+    require_within(inference_output_dir, (repo_root / "data" / "processed",), "Inference image output")
+    require_within(report_dir, (repo_root / "reports" / "tables",), "Resize report output")
 
     validate_input_dir(input_dir)
     ids = read_manifest_ids(manifest_path)
@@ -434,7 +440,7 @@ def main() -> None:
     resize_manifest.to_csv(resize_manifest_path, index=False)
     write_summary(
         summary_path=summary_path,
-        config_path=args.config,
+        config_path=config_path,
         manifest_path=manifest_path,
         input_dir=input_dir,
         sensor_output_dir=sensor_output_dir,

@@ -15,6 +15,8 @@ import pandas as pd
 from PIL import Image
 import torch
 
+from _project_paths import REPO_ROOT, resolve_input, resolve_result_output
+
 
 RESULTS_DIR = Path("results/mobile_sam_prompt_pilot")
 SUMMARY_CSV = "pilot_summary.csv"
@@ -197,11 +199,12 @@ def process_image(
     start = time.perf_counter()
     image_path = input_dir / f"{isic_id}.jpg"
     image_output_dir = output_dir / isic_id
-    image_output_dir.mkdir(parents=True, exist_ok=True)
 
     try:
         if not image_path.exists():
             raise FileNotFoundError(f"Input image not found: {image_path}")
+
+        image_output_dir.mkdir(parents=True, exist_ok=True)
 
         image = Image.open(image_path).convert("RGB")
         image_array = np.array(image)
@@ -316,14 +319,19 @@ def write_markdown_summary(
 
 def main() -> None:
     args = parse_args()
+    args.manifest = resolve_input(args.manifest)
+    args.input_dir = resolve_input(args.input_dir)
+    args.checkpoint = resolve_input(args.checkpoint)
+    args.output_dir = resolve_result_output(args.output_dir)
     validate_args(args)
 
-    repo_root = Path(__file__).resolve().parent.parent
-    results_dir = repo_root / RESULTS_DIR
+    results_dir = REPO_ROOT / RESULTS_DIR
     results_dir.mkdir(parents=True, exist_ok=True)
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
     isic_ids = read_limited_ids(args.manifest, args.limit)
+    if not isic_ids:
+        raise SystemExit("Manifest CSV contains no usable isic_id values.")
     predictor = load_predictor(args.checkpoint)
 
     all_rows: list[dict] = []

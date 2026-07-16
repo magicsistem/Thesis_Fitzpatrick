@@ -72,10 +72,28 @@ rationale = "Multiple images may belong to the same patient or lesion, so patien
 [segmentation]
 enabled = true
 initial_mode = "pilot_only"
-candidate_models = ["SAM", "MedSAM", "SAMed", "SAM-Med-style"]
+candidate_models = [
+  "TMUNet",
+  "Attention DeepLabv3+",
+  "BCDU-Net",
+  "AViT",
+  "ISCF",
+  "BA-Transformer",
+  "SkinMamba",
+  "MobileSAM baseline"
+]
 mask_validation_required = true
 use_generated_masks_for_training_without_validation = false
 notes = "Segmentation masks must be visually and quantitatively validated before downstream classification."
+
+[segmentation_benchmark]
+input_image_dir = "data/processed/isic_segmentation_pilot_resized_inference"
+result_dir = "results/segmentation_benchmark"
+model_catalog = "configs/segmentation_models.json"
+required_lesion_mask_name = "lesion_mask.png"
+derived_clean_skin_mask_name = "clean_skin_mask.png"
+skin_colour_statistics = ["rgb_median", "rgb_trimmed_mean", "lab_median", "ita_degrees"]
+fitzpatrick_warning = "Fitzpatrick is a sun-response phenotype and must not be replaced by an image-colour estimate."
 
 [classification]
 baseline_input = "original_dermoscopic_image"

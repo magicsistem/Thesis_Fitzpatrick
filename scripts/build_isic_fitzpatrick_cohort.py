@@ -10,6 +10,8 @@ import tomllib
 
 import pandas as pd
 
+from _project_paths import require_within, resolve_input
+
 
 LIGHTER_GROUP = "lighter_I_III"
 DARKER_GROUP = "darker_IV_VI"
@@ -57,8 +59,6 @@ def apply_filters(df: pd.DataFrame, config: dict) -> pd.DataFrame:
     filtered = df.copy()
 
     if exclusions.get("exclude_non_dermoscopic", False):
-        filtered = filtered[filtered["image_type"].isin(cohort["include_image_type"])]
-    else:
         filtered = filtered[filtered["image_type"].isin(cohort["include_image_type"])]
 
     if exclusions.get("exclude_missing_label", False):
@@ -225,13 +225,16 @@ def write_summary(
 
 def main() -> None:
     args = parse_args()
-    config_path = args.config
-    repo_root = config_path.resolve().parent.parent
+    config_path = resolve_input(args.config)
+    repo_root = config_path.parent.parent
     config = read_config(config_path)
 
     raw_metadata_path = resolve_path(config["paths"]["raw_metadata_csv"], repo_root)
     cohort_output_path = resolve_path(config["paths"]["cohort_output_csv"], repo_root)
     summary_path = repo_root / "reports/tables/cohort_build/isic_fitzpatrick_dermoscopic_binary_v1_summary.md"
+    require_within(raw_metadata_path, (repo_root / "data" / "raw",), "Raw metadata input")
+    require_within(cohort_output_path, (repo_root / "data" / "interim",), "Cohort output")
+    require_within(summary_path, (repo_root / "reports" / "tables",), "Summary output")
 
     if not raw_metadata_path.exists():
         raise SystemExit(f"Raw metadata CSV does not exist: {raw_metadata_path}")

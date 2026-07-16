@@ -13,6 +13,8 @@ import time
 
 import pandas as pd
 
+from _project_paths import REPO_ROOT, require_within, resolve_data_output, resolve_input
+
 
 SUMMARY_DIR = Path("reports/tables/segmentation_pilot_download")
 DOWNLOAD_BATCHES_CSV = "download_batches.csv"
@@ -273,14 +275,18 @@ def write_summary(
 
 def main() -> None:
     args = parse_args()
+    args.manifest = resolve_input(args.manifest)
+    args.output_dir = resolve_data_output(args.output_dir)
+    require_within(args.output_dir, (REPO_ROOT / "data" / "raw",), "Download output")
     validate_args(args)
     ensure_isic_cli_available()
 
-    repo_root = Path(__file__).resolve().parent.parent
-    summary_dir = repo_root / SUMMARY_DIR
+    summary_dir = REPO_ROOT / SUMMARY_DIR
     summary_dir.mkdir(parents=True, exist_ok=True)
 
     manifest_ids = read_manifest_ids(args.manifest)
+    if not manifest_ids:
+        raise SystemExit("Manifest CSV contains no usable isic_id values.")
     batches = split_batches(manifest_ids, args.batch_size)
 
     prepare_output_dir(args.output_dir, args.overwrite)

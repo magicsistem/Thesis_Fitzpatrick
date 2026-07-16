@@ -11,6 +11,8 @@ import tomllib
 
 import pandas as pd
 
+from _project_paths import require_within, resolve_input
+
 
 KEY_COLUMNS = [
     "isic_id",
@@ -318,11 +320,14 @@ def main() -> None:
     args = parse_args()
     validate_args(args.per_cell)
 
-    config = read_config(args.config)
-    repo_root = args.config.resolve().parent.parent
+    config_path = resolve_input(args.config)
+    config = read_config(config_path)
+    repo_root = config_path.parent.parent
     cohort_path = resolve_path(config["paths"]["cohort_output_csv"], repo_root)
     output_path = resolve_path(args.output, repo_root)
     summary_path = resolve_path(SUMMARY_PATH, repo_root)
+    require_within(output_path, (repo_root / "data" / "interim",), "Manifest output")
+    require_within(summary_path, (repo_root / "reports" / "tables",), "Summary output")
 
     if not cohort_path.exists():
         raise SystemExit(f"Cohort CSV does not exist: {cohort_path}")

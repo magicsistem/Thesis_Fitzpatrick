@@ -9,6 +9,8 @@ from pathlib import Path
 
 import pandas as pd
 
+from _project_paths import resolve_input, resolve_report_output
+
 
 REQUIRED_COLUMNS = [
     "isic_id",
@@ -202,8 +204,8 @@ def write_markdown_summary(
 
 def main() -> None:
     args = parse_args()
-    input_path = args.input
-    output_dir = args.output_dir
+    input_path = resolve_input(args.input)
+    output_dir = resolve_report_output(args.output_dir)
 
     if not input_path.exists():
         raise SystemExit(f"Input CSV does not exist: {input_path}")

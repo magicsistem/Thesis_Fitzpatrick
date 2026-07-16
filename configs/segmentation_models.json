@@ -1,0 +1,108 @@
+{
+  "models": [
+    {
+      "id": "tmunet",
+      "name": "TMUNet",
+      "priority": 1,
+      "recommended": true,
+      "framework": "PyTorch",
+      "datasets": ["ISIC 2017", "ISIC 2018", "PH2"],
+      "checkpoint_status": "public",
+      "integration_status": "adapter_required",
+      "repository": "https://github.com/rezazad68/TMUnet",
+      "reason": "Mejor equilibrio inicial entre pesos públicos, scripts de evaluación y enfoque dermatoscópico.",
+      "adapter_command": null
+    },
+    {
+      "id": "attention-deeplabv3plus",
+      "name": "Attention DeepLabv3+",
+      "priority": 2,
+      "recommended": true,
+      "framework": "TensorFlow/Keras",
+      "datasets": ["ISIC 2017", "ISIC 2018", "PH2"],
+      "checkpoint_status": "public",
+      "integration_status": "adapter_required",
+      "repository": "https://github.com/rezazad68/AttentionDeeplabv3p",
+      "reason": "Baseline estable con pesos públicos y flujo de evaluación relativamente directo.",
+      "adapter_command": null
+    },
+    {
+      "id": "bcdu-net",
+      "name": "BCDU-Net",
+      "priority": 3,
+      "recommended": true,
+      "framework": "TensorFlow/Keras",
+      "datasets": ["ISIC 2018"],
+      "checkpoint_status": "public",
+      "integration_status": "adapter_required",
+      "repository": "https://github.com/rezazad68/BCDU-Net",
+      "reason": "Baseline clásico y útil para comprobar que modelos más complejos aporten mejoras reales.",
+      "adapter_command": null
+    },
+    {
+      "id": "avit",
+      "name": "AViT",
+      "priority": 4,
+      "recommended": true,
+      "framework": "PyTorch",
+      "datasets": ["ISIC 2018", "Dermofit", "SCD", "PH2"],
+      "checkpoint_status": "public",
+      "integration_status": "adapter_required",
+      "repository": "https://github.com/siyi-wind/AViT",
+      "reason": "Baseline transformer moderno con pesos para varios dominios dermatoscópicos.",
+      "adapter_command": null
+    },
+    {
+      "id": "iscf",
+      "name": "ISCF",
+      "priority": 5,
+      "recommended": true,
+      "framework": "PyTorch/Jupyter",
+      "datasets": ["ISIC 2017", "ISIC 2018"],
+      "checkpoint_status": "public",
+      "integration_status": "adapter_required",
+      "repository": "https://github.com/saniaesk/skin-lesion-segmentation",
+      "reason": "Alternativa transformer con pesos públicos, aunque requiere convertir el notebook en adaptador.",
+      "adapter_command": null
+    },
+    {
+      "id": "ba-transformer",
+      "name": "BA-Transformer",
+      "priority": 6,
+      "recommended": false,
+      "framework": "PyTorch + CUDA/C++",
+      "datasets": ["ISIC", "PH2"],
+      "checkpoint_status": "ph2_public",
+      "integration_status": "adapter_required",
+      "repository": "https://github.com/jcwang123/BA-Transformer",
+      "reason": "Modelo fuerte, pero su peso público y operaciones personalizadas aumentan el riesgo de integración.",
+      "adapter_command": null
+    },
+    {
+      "id": "skinmamba",
+      "name": "SkinMamba",
+      "priority": 7,
+      "recommended": false,
+      "framework": "PyTorch/Mamba",
+      "datasets": ["ISIC 2017", "ISIC 2018"],
+      "checkpoint_status": "public",
+      "integration_status": "adapter_required",
+      "repository": "https://github.com/zs1314/skinmamba",
+      "reason": "Arquitectura moderna y licenciada, pero con dependencias más complejas y GPU prácticamente necesaria.",
+      "adapter_command": null
+    },
+    {
+      "id": "mobile-sam-baseline",
+      "name": "MobileSAM (baseline)",
+      "priority": 8,
+      "recommended": false,
+      "framework": "PyTorch",
+      "datasets": ["Segment Anything"],
+      "checkpoint_status": "local",
+      "integration_status": "manual_candidate_selection",
+      "repository": "https://github.com/ChaoningZhang/MobileSAM",
+      "reason": "Se conserva solo como referencia: requiere prompts y ya mostró fallos en lesiones de bajo contraste.",
+      "adapter_command": null
+    }
+  ]
+}
