@@ -1,17 +1,24 @@
 from __future__ import annotations
 
 import json
+import tempfile
 from pathlib import Path
 import sys
 import threading
 import unittest
+from unittest.mock import patch
 from urllib.request import urlopen
 
+import numpy as np
+from PIL import Image
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
-from serve_segmentation_review import ReviewHandler, ThreadingHTTPServer
+import serve_segmentation_review as review
+
+ReviewHandler = review.ReviewHandler
+ThreadingHTTPServer = review.ThreadingHTTPServer
 
 
 class ReviewServerTests(unittest.TestCase):
@@ -28,17 +35,75 @@ class ReviewServerTests(unittest.TestCase):
         cls.server.server_close()
         cls.thread.join(timeout=2)
 
-    def test_state_lists_eight_models(self) -> None:
+    def test_state_lists_ten_models_with_provenance(self) -> None:
         with urlopen(f"{self.base_url}/api/state") as response:
             payload = json.load(response)
-        self.assertEqual(len(payload["models"]), 8)
+        self.assertEqual(len(payload["models"]), 10)
         self.assertEqual(sum(model["recommended"] for model in payload["models"]), 5)
+        for model in payload["models"]:
+            self.assertTrue(model["year"])
+            self.assertTrue(model["license"])
+            self.assertTrue(model["repository"].startswith("https://github.com/"))
+            self.assertTrue(model["description"])
 
     def test_index_is_served(self) -> None:
         with urlopen(f"{self.base_url}/") as response:
             page = response.read().decode("utf-8")
         self.assertIn("Comparación de máscaras", page)
         self.assertIn("id=\"carousel\"", page)
+
+    def test_ready_result_writes_skin_mask_and_statistics(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            image_path = root / "input.jpg"
+            Image.fromarray(np.full((48, 64, 3), [120, 85, 65], dtype=np.uint8)).save(image_path)
+            results = root / "results"
+            lesion_path = results / "model" / "image" / "lesion_mask.png"
+            lesion_path.parent.mkdir(parents=True)
+            lesion = np.zeros((48, 64), dtype=np.uint8)
+            lesion[16:32, 24:40] = 255
+            Image.fromarray(lesion).save(lesion_path)
+
+            with patch.object(review, "RESULTS_DIR", results):
+                payload = review.result_payload("model", "image", image_path)
+
+            self.assertEqual(payload["status"], "ready")
+            self.assertTrue((lesion_path.parent / "clean_skin_mask.png").is_file())
+            self.assertTrue((lesion_path.parent / "colour_stats.json").is_file())
+
+    def test_adapter_collects_runtime_metrics(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            lesion_path = Path(directory) / "lesion_mask.png"
+            model = {
+                "adapter_command": [
+                    sys.executable,
+                    "-c",
+                    "from PIL import Image; import sys; Image.new('L', (2, 2), 255).save(sys.argv[1])",
+                    "{lesion_mask}",
+                ]
+            }
+            success, _, metrics = review.run_adapter(model, Path("unused.jpg"), lesion_path)
+
+            self.assertTrue(success)
+            self.assertIsNotNone(metrics)
+            self.assertIn("wall_seconds", metrics)
+            self.assertIn("cpu_percent_single_core_equivalent", metrics)
+            self.assertIn("peak_ram_mb", metrics)
+
+    def test_benchmark_summary_averages_per_model(self) -> None:
+        runtime = {
+            "wall_seconds": 2.0,
+            "cpu_percent_single_core_equivalent": 50.0,
+            "cpu_percent_system_capacity": 5.0,
+            "peak_ram_mb": 100.0,
+        }
+        summaries = review.benchmark_summaries([
+            {"model_id": "a", "status": "ready", "runtime": runtime},
+            {"model_id": "a", "status": "ready", "runtime": runtime},
+        ])
+        self.assertEqual(summaries[0]["images_timed"], 2)
+        self.assertEqual(summaries[0]["average_wall_seconds"], 2.0)
+        self.assertEqual(summaries[0]["peak_ram_mb_max"], 100.0)
 
 
 if __name__ == "__main__":

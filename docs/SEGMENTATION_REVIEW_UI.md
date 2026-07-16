@@ -18,15 +18,17 @@ markers, rulers, gel, colour shifts, or transparent dermatoscope-tip artifacts.
 
 The first five models to integrate and test are:
 
-1. TMUNet.
-2. Attention DeepLabv3+.
-3. BCDU-Net.
-4. AViT.
-5. ISCF.
+1. AViT.
+2. ISCF.
+3. SkinMamba.
+4. UltraLight VM-UNet.
+5. UCM-Net.
 
-BA-Transformer, SkinMamba, and MobileSAM are secondary comparators. MobileSAM
-remains a prompt-based baseline and must not be mixed conceptually with the
-prompt-free supervised segmenters.
+EGE-UNet, MALUNet, MHorUNet, HSH-UNet, and MobileSAM are secondary
+comparators. MobileSAM remains a prompt-based baseline and must not be mixed
+conceptually with the prompt-free supervised segmenters. TMUNet, Attention
+DeepLabv3+, and BCDU-Net were removed from the live catalogue after GitHub
+reported their original repositories as unavailable on 2026-07-16.
 
 The catalogue at `configs/segmentation_models.json` distinguishes public
 checkpoint availability from local integration. A model is not runnable until
@@ -46,8 +48,8 @@ Example after an adapter has been implemented:
 
 ```json
 "adapter_command": [
-  "conda", "run", "-n", "seg-tmunet", "python",
-  "scripts/adapters/run_tmunet.py",
+  "conda", "run", "-n", "seg-model", "python",
+  "scripts/adapters/run_model.py",
   "--image", "{image}",
   "--output", "{lesion_mask}"
 ]
@@ -73,6 +75,26 @@ up to 10 models. It displays a carousel with:
 
 If an adapter is not configured, the interface reports that state instead of
 fabricating an inference.
+
+## Runtime measurements
+
+For every adapter invocation, the server records:
+
+- wall time for the individual image;
+- child-process CPU seconds;
+- CPU percentage expressed as the equivalent use of one logical core;
+- CPU percentage normalized by the machine's total logical-core capacity;
+- approximate peak resident memory for the adapter process tree.
+
+The Linux `/proc` filesystem is sampled every 0.05 seconds for memory. RAM is
+therefore an approximation and very short peaks can be missed. CPU comes from
+the operating system's child-process resource accounting. The interface shows
+per-image measurements and a per-model summary with total time, average time,
+average CPU, and maximum observed RAM.
+
+Metrics are saved beside each mask in `runtime_metrics.json`. They describe the
+local machine and environment used for that run and must not be compared with
+published GPU results as if the hardware were equivalent.
 
 ## Post-process an existing lesion mask
 

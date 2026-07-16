@@ -1,4 +1,4 @@
-const state = { models: [], images: [], results: [], slide: 0 };
+const state = { models: [], images: [], results: [], summaries: [], slide: 0 };
 const $ = (selector) => document.querySelector(selector);
 
 function checkedValues(selector) {
@@ -16,8 +16,10 @@ function renderModels() {
       <input class="model-check" type="checkbox" value="${model.id}" ${model.recommended ? "checked" : ""}>
       <span class="model-name">${model.name}</span>
       ${model.recommended ? '<span class="badge">TOP 5</span>' : ""}
-      <span class="model-meta">${model.framework} · ${model.datasets.join(", ")}</span>
-      <span class="model-reason">${model.reason}</span>
+      <span class="model-meta">${model.year} · ${model.license} · ${model.framework}</span>
+      <span class="model-meta">Datos: ${model.datasets.join(", ")}</span>
+      <span class="model-reason">${model.description}</span>
+      <a class="repo-link" href="${model.repository}" target="_blank" rel="noreferrer" onclick="event.stopPropagation()">Abrir GitHub ↗</a>
     </label>`).join("");
   document.querySelectorAll(".model-check").forEach((input) => input.addEventListener("change", updateCounts));
 }
@@ -48,6 +50,30 @@ function resultPanel(title, url, alt) {
     : `<div class="missing"><strong>${title}</strong><br>Resultado todavía no disponible.</div>`;
 }
 
+function renderSummaries() {
+  const container = $("#benchmark-summary");
+  if (!state.summaries.length) {
+    container.hidden = true;
+    container.innerHTML = "";
+    return;
+  }
+  container.hidden = false;
+  container.innerHTML = `
+    <h3>Resumen de rendimiento</h3>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Modelo</th><th>Imágenes</th><th>Tiempo total</th><th>Promedio/imagen</th><th>CPU promedio</th><th>CPU del sistema</th><th>RAM máxima</th></tr></thead>
+      <tbody>${state.summaries.map((summary) => {
+        const model = state.models.find((item) => item.id === summary.model_id);
+        return `<tr><td>${model?.name ?? summary.model_id}</td><td>${summary.images_timed}</td><td>${summary.total_wall_seconds} s</td><td>${summary.average_wall_seconds} s</td><td>${summary.average_cpu_percent_single_core_equivalent}% de un núcleo</td><td>${summary.average_cpu_percent_system_capacity}%</td><td>${summary.peak_ram_mb_max} MB</td></tr>`;
+      }).join("")}</tbody>
+    </table></div>`;
+}
+
+function runtimeDetails(runtime) {
+  if (!runtime) return "Sin medición de recursos para esta máscara.";
+  return `Tiempo: ${runtime.wall_seconds} s · CPU: ${runtime.cpu_seconds} s (${runtime.cpu_percent_single_core_equivalent}% de un núcleo; ${runtime.cpu_percent_system_capacity}% del sistema) · RAM máxima: ${runtime.peak_ram_mb} MB`;
+}
+
 function renderSlide() {
   if (!state.results.length) return;
   const result = state.results[state.slide];
@@ -63,6 +89,7 @@ function renderSlide() {
       ${resultPanel("Máscara 1: lesión", result.lesion_mask_url, "Máscara binaria de lesión")}
       ${resultPanel("Máscara 2: piel limpia", result.clean_skin_mask_url, "Máscara de piel circundante")}
     </div>
+    <p class="runtime"><strong>Rendimiento por imagen:</strong> ${runtimeDetails(result.runtime)}</p>
     <p class="stats">${stats
       ? `Píxeles de piel: ${stats.pixel_count} · RGB mediana: ${stats.rgb_median.join(", ")} · Lab mediana: ${stats.lab_median.join(", ")} · ITA: ${stats.ita_degrees}°`
       : result.message ?? "Este modelo necesita un adaptador y su checkpoint antes de inferir."}</p>`;
@@ -79,9 +106,11 @@ async function runReview() {
   const payload = await response.json();
   if (!response.ok) { $("#status").textContent = payload.error; return; }
   state.results = payload.results;
+  state.summaries = payload.summaries ?? [];
   state.slide = 0;
   $("#status").textContent = `${state.results.filter((r) => r.status === "ready").length} resultados listos de ${state.results.length}.`;
   $("#carousel").hidden = false;
+  renderSummaries();
   renderSlide();
 }
 

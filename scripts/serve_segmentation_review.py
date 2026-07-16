@@ -6,9 +6,12 @@ import argparse
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import json
 import mimetypes
+import os
 from pathlib import Path
+import resource
 import subprocess
 import sys
+import time
 from urllib.parse import unquote, urlparse
 
 from PIL import Image
@@ -46,11 +49,17 @@ def list_images() -> list[dict]:
     ]
 
 
-def result_payload(model_id: str, image_id: str, image_path: Path) -> dict:
+def result_payload(
+    model_id: str,
+    image_id: str,
+    image_path: Path,
+    runtime: dict | None = None,
+) -> dict:
     output_dir = RESULTS_DIR / model_id / image_id
     lesion_path = output_dir / "lesion_mask.png"
     skin_path = output_dir / "clean_skin_mask.png"
     stats_path = output_dir / "colour_stats.json"
+    runtime_path = output_dir / "runtime_metrics.json"
     if not lesion_path.is_file():
         return {
             "model_id": model_id,
@@ -71,40 +80,11 @@ def result_payload(model_id: str, image_id: str, image_path: Path) -> dict:
         "skin_colour": stats.to_dict(),
         "warning": "Fitzpatrick no se deduce únicamente a partir del color de la imagen.",
     }
-
-
-def run_adapter(model: dict, image_path: Path, lesion_path: Path) -> tuple[bool, str]:
-    """Run a configured adapter without invoking a shell."""
-    template = model.get("adapter_command")
-    if not template:
-        return False, "El modelo está catalogado, pero todavía no tiene adaptador configurado."
-    if not isinstance(template, list) or not all(isinstance(token, str) for token in template):
-        return False, "adapter_command debe ser una lista JSON de argumentos."
-    lesion_path.parent.mkdir(parents=True, exist_ok=True)
-    replacements = {
-        "{image}": str(image_path),
-        "{lesion_mask}": str(lesion_path),
-        "{repo_root}": str(REPO_ROOT),
-    }
-    command = [replacements.get(token, token) for token in template]
-    try:
-        completed = subprocess.run(
-            command,
-            cwd=REPO_ROOT,
-            capture_output=True,
-            text=True,
-            timeout=900,
-            check=False,
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        return False, str(exc)
-    if completed.returncode != 0:
-        detail = completed.stderr.strip() or completed.stdout.strip() or "sin detalle"
-        return False, f"El adaptador terminó con código {completed.returncode}: {detail[-800:]}"
-    if not lesion_path.is_file():
-        return False, "El adaptador terminó, pero no creó lesion_mask.png."
-    return True, "ok"
     stats_path.write_text(json.dumps(stats_payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    if runtime is not None:
+        runtime_path.write_text(json.dumps(runtime, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    elif runtime_path.is_file():
+        runtime = json.loads(runtime_path.read_text(encoding="utf-8"))
     base = f"/files/result/{model_id}/{image_id}"
     return {
         "model_id": model_id,
@@ -114,7 +94,144 @@ def run_adapter(model: dict, image_path: Path, lesion_path: Path) -> tuple[bool,
         "lesion_mask_url": f"{base}/lesion_mask.png",
         "clean_skin_mask_url": f"{base}/clean_skin_mask.png",
         "stats": stats_payload,
+        "runtime": runtime,
     }
+
+
+def _process_tree_rss_kb(root_pid: int) -> int:
+    """Read aggregate resident memory for a Linux process and descendants."""
+    processes: dict[int, tuple[int, int]] = {}
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            status = (entry / "status").read_text(encoding="utf-8")
+        except (FileNotFoundError, PermissionError, ProcessLookupError):
+            continue
+        ppid = 0
+        rss_kb = 0
+        for line in status.splitlines():
+            if line.startswith("PPid:"):
+                ppid = int(line.split()[1])
+            elif line.startswith("VmRSS:"):
+                rss_kb = int(line.split()[1])
+        processes[int(entry.name)] = (ppid, rss_kb)
+
+    descendants = {root_pid}
+    changed = True
+    while changed:
+        changed = False
+        for pid, (ppid, _) in processes.items():
+            if ppid in descendants and pid not in descendants:
+                descendants.add(pid)
+                changed = True
+    return sum(processes.get(pid, (0, 0))[1] for pid in descendants)
+
+
+def _runtime_metrics(start: float, peak_rss_kb: int, before: resource.struct_rusage) -> dict:
+    wall_seconds = max(time.perf_counter() - start, 1e-9)
+    after = resource.getrusage(resource.RUSAGE_CHILDREN)
+    cpu_seconds = max(
+        0.0,
+        (after.ru_utime + after.ru_stime) - (before.ru_utime + before.ru_stime),
+    )
+    logical_cpus = os.cpu_count() or 1
+    single_core_percent = cpu_seconds / wall_seconds * 100.0
+    return {
+        "wall_seconds": round(wall_seconds, 4),
+        "cpu_seconds": round(cpu_seconds, 4),
+        "cpu_percent_single_core_equivalent": round(single_core_percent, 2),
+        "cpu_percent_system_capacity": round(single_core_percent / logical_cpus, 2),
+        "logical_cpu_count": logical_cpus,
+        "peak_ram_mb": round(peak_rss_kb / 1024.0, 2),
+        "sampling_interval_seconds": 0.05,
+    }
+
+
+def benchmark_summaries(results: list[dict]) -> list[dict]:
+    summaries = []
+    model_ids = sorted({result["model_id"] for result in results})
+    for model_id in model_ids:
+        runtimes = [
+            result["runtime"]
+            for result in results
+            if result["model_id"] == model_id
+            and result.get("status") == "ready"
+            and result.get("runtime")
+        ]
+        if not runtimes:
+            continue
+        summaries.append({
+            "model_id": model_id,
+            "images_timed": len(runtimes),
+            "total_wall_seconds": round(sum(item["wall_seconds"] for item in runtimes), 4),
+            "average_wall_seconds": round(
+                sum(item["wall_seconds"] for item in runtimes) / len(runtimes), 4
+            ),
+            "average_cpu_percent_single_core_equivalent": round(
+                sum(item["cpu_percent_single_core_equivalent"] for item in runtimes) / len(runtimes), 2
+            ),
+            "average_cpu_percent_system_capacity": round(
+                sum(item["cpu_percent_system_capacity"] for item in runtimes) / len(runtimes), 2
+            ),
+            "peak_ram_mb_max": round(max(item["peak_ram_mb"] for item in runtimes), 2),
+        })
+    return summaries
+
+
+def run_adapter(model: dict, image_path: Path, lesion_path: Path) -> tuple[bool, str, dict | None]:
+    """Run a configured adapter without invoking a shell."""
+    template = model.get("adapter_command")
+    if not template:
+        return False, "El modelo está catalogado, pero todavía no tiene adaptador configurado.", None
+    if not isinstance(template, list) or not all(isinstance(token, str) for token in template):
+        return False, "adapter_command debe ser una lista JSON de argumentos.", None
+    lesion_path.parent.mkdir(parents=True, exist_ok=True)
+    replacements = {
+        "{image}": str(image_path),
+        "{lesion_mask}": str(lesion_path),
+        "{repo_root}": str(REPO_ROOT),
+    }
+    command = [replacements.get(token, token) for token in template]
+    before = resource.getrusage(resource.RUSAGE_CHILDREN)
+    start = time.perf_counter()
+    peak_rss_kb = 0
+    try:
+        process = subprocess.Popen(
+            command,
+            cwd=REPO_ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        while True:
+            peak_rss_kb = max(peak_rss_kb, _process_tree_rss_kb(process.pid))
+            try:
+                stdout, stderr = process.communicate(timeout=0.05)
+                break
+            except subprocess.TimeoutExpired:
+                if time.perf_counter() - start > 900:
+                    process.kill()
+                    stdout, stderr = process.communicate()
+                    metrics = _runtime_metrics(start, peak_rss_kb, before)
+                    lesion_path.unlink(missing_ok=True)
+                    return False, "El adaptador superó el límite de 900 segundos.", metrics
+    except OSError as exc:
+        return False, str(exc), None
+    metrics = _runtime_metrics(start, peak_rss_kb, before)
+    if process.returncode != 0:
+        detail = stderr.strip() or stdout.strip() or "sin detalle"
+        lesion_path.unlink(missing_ok=True)
+        return False, f"El adaptador terminó con código {process.returncode}: {detail[-800:]}", metrics
+    if not lesion_path.is_file():
+        return False, "El adaptador terminó, pero no creó lesion_mask.png.", metrics
+    try:
+        with Image.open(lesion_path) as candidate:
+            candidate.verify()
+    except (OSError, ValueError) as exc:
+        lesion_path.unlink(missing_ok=True)
+        return False, f"El adaptador creó una máscara inválida: {exc}", metrics
+    return True, "ok", metrics
 
 
 class ReviewHandler(SimpleHTTPRequestHandler):
@@ -182,8 +299,9 @@ class ReviewHandler(SimpleHTTPRequestHandler):
                         raise ValueError(f"Imagen desconocida: {image_id}")
                     image_path = INPUT_DIR / images[image_id]["filename"]
                     lesion_path = RESULTS_DIR / model_id / image_id / "lesion_mask.png"
+                    runtime = None
                     if not lesion_path.is_file():
-                        success, message = run_adapter(models[model_id], image_path, lesion_path)
+                        success, message, runtime = run_adapter(models[model_id], image_path, lesion_path)
                         if not success:
                             results.append({
                                 "model_id": model_id,
@@ -191,10 +309,11 @@ class ReviewHandler(SimpleHTTPRequestHandler):
                                 "status": "adapter_unavailable",
                                 "message": message,
                                 "original_url": f"/files/input/{image_path.name}",
+                                "runtime": runtime,
                             })
                             continue
-                    results.append(result_payload(model_id, image_id, image_path))
-            self._json({"results": results})
+                    results.append(result_payload(model_id, image_id, image_path, runtime))
+            self._json({"results": results, "summaries": benchmark_summaries(results)})
         except (ValueError, json.JSONDecodeError) as exc:
             self._json({"error": str(exc)}, status=400)
 

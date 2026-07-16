@@ -73,13 +73,15 @@ rationale = "Multiple images may belong to the same patient or lesion, so patien
 enabled = true
 initial_mode = "pilot_only"
 candidate_models = [
-  "TMUNet",
-  "Attention DeepLabv3+",
-  "BCDU-Net",
   "AViT",
   "ISCF",
-  "BA-Transformer",
   "SkinMamba",
+  "UltraLight VM-UNet",
+  "UCM-Net",
+  "EGE-UNet",
+  "MALUNet",
+  "MHorUNet",
+  "HSH-UNet",
   "MobileSAM baseline"
 ]
 mask_validation_required = true
