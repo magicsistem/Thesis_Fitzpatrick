@@ -57,14 +57,15 @@ Para cada candidato se comprobó en la fuente pública:
    atributos dermatoscópicos;
 2. que hubiese código suficiente para reconstruir el modelo;
 3. que el checkpoint estuviese presente o enlazado por la fuente oficial;
-4. que hubiera una licencia explícita;
+4. qué licencia se declara, registrando también su ausencia sin ocultarla;
 5. el dataset declarado y si el modelo requiere prompt, GPU o acceso aprobado;
 6. si el diseño aporta algo relevante para bordes ambiguos, bajo contraste,
    artefactos o generalización.
 
-En esta fase web no se descargaron los pesos grandes ni se fijaron hashes. Antes
-de introducir un candidato en la interfaz se debe repetir la auditoría local:
-descarga, `sha256sum`, inspección del estado, carga estricta e inferencia real.
+Después de la búsqueda se ejecutó la auditoría local: se descargaron los pesos,
+se fijaron revisiones y SHA-256, se inspeccionaron los estados y se escribieron
+adaptadores. Los resultados definitivos, incluidos hallazgos que corrigieron la
+tarjeta de algún modelo, están en `SEGMENTATION_CHECKPOINT_AUDIT.md`.
 
 ## Resultado ejecutivo
 
@@ -75,15 +76,14 @@ descarga, `sha256sum`, inspección del estado, carga estricta e inferencia real.
 | 1 | De-LightSAM Dermoscopy | Sí, Google Drive oficial | Apache-2.0 | No se observa en el evaluador oficial | Entrenamiento desacoplado por modalidad y objetivo de generalización; checkpoint específico de dermoscopia |
 | 2 | DermoSegDiff-A ISIC 2018 | Sí, SharePoint oficial | MIT | No | Modelo de difusión con pérdida consciente del borde; candidato directo para contornos ambiguos |
 | 3 | VM-UNet ISIC 2017/2018 | Sí, Google Drive/Baidu oficiales | Apache-2.0 | No | Contexto global con SSM y dos checkpoints específicos de ISIC |
-| 4 | DenseNet201 U-Net de DevBhuyan | Sí, Hugging Face | Apache-2.0 | No | Checkpoint Keras directamente descargable y arquitectura distinta a las ya probadas |
-| 5 | SegFormer de Theodore Ioannidis | Sí, Hugging Face Space | No declarada | No | Transformer compacto entrenado en ISIC 2018; útil como contraste arquitectónico |
+| 4 | U-Net/U-Net++ de Unixio | Sí, Hugging Face | MIT | No | Dos baselines con Dice autor-reportado cercano a 0.906 y código completo |
+| 5 | SegFormer de Theodore Ioannidis | Sí, Hugging Face Space | MIT | No | Transformer compacto entrenado en ISIC 2018; útil como contraste arquitectónico |
 | 6 | BiomedParse | Sí, pero con acceso aceptado | CC-BY-NC-SA-4.0 | Sí, texto | Foundation model con clase de dermoscopia; solo comparador condicionado a GPU y licencia no comercial |
 
-La prioridad anterior mide pertinencia científica, no facilidad en el equipo
-actual. Para una ruta **CPU primero**, el orden práctico sería: DenseNet201
-U-Net, SegFormer del Space y después VM-UNet si su operación Mamba puede
-adaptarse de manera reproducible. De-LightSAM y DermoSegDiff deben tratarse como
-pruebas GPU salvo que una medición local demuestre lo contrario.
+La auditoría posterior descartó el H5 de DevBhuyan: internamente es un
+clasificador ResNet50/densas sin salida espacial. En cambio, recuperó código y
+licencia de Unixio y demostró que VM-UNet y De-LightSAM pueden tener una ruta
+CPU de referencia, aunque previsiblemente lenta.
 
 ## Candidatos accesibles con checkpoint
 
@@ -100,13 +100,13 @@ pruebas GPU salvo que una medición local demuestre lo contrario.
 - Interfaz: el evaluador oficial llama `model(x=image, domain_seq=modalidad)`;
   no se observa un punto o caja dibujado por el usuario. `domain_seq` es la
   modalidad, no un prompt espacial.
-- Coste: el entorno oficial es CUDA/PyTorch 1.13; el script mueve modelo e
-  imágenes directamente a CUDA. No debe anunciarse como CPU hasta adaptar y
-  medirlo.
+- Coste: el entorno oficial es CUDA/PyTorch 1.13; el adaptador conserva la
+  arquitectura y reemplaza las llamadas del evaluador por tensores CPU. La
+  entrada 1024 × 1024 hace que siga siendo una prueba muy pesada.
 - Interés: fue diseñado para segmentación médica generalizable por modalidad.
   No existe evidencia específica de que elimine el aro del dermatoscopio, pero
   sí es uno de los checkpoints más pertinentes para medir cambio de dominio.
-- Estado propuesto: **descargar, fijar hash e implementar como experimento GPU**.
+- Estado: **implementado como experimento CPU no preseleccionado**.
 
 ### 2. DermoSegDiff-A y DermoSegDiff-B
 
@@ -143,20 +143,19 @@ pruebas GPU salvo que una medición local demuestre lo contrario.
 - Interfaz: automática, sin prompt.
 - Interés: modela dependencias de largo alcance con estado espacial; aporta una
   familia distinta a AViT, BA-Transformer y U-Net.
-- Coste: el entorno oficial usa `mamba_ssm`, `causal_conv1d`, Triton y CUDA. Es
-  necesario verificar si la misma recurrencia puede ejecutarse en CPU sin
-  modificar pesos, como ya se hizo con SkinMamba/UltraLight.
-- Estado propuesto: **candidato oficial de alta prioridad**, condicionado a
-  enumerar los archivos del Drive, descargar ambos ISIC y fijar sus hashes.
+- Coste: el entorno oficial usa `mamba_ssm`, `causal_conv1d`, Triton y CUDA. La
+  integración sustituye ese kernel por la recurrencia PyTorch de referencia,
+  sin modificar los pesos; será más lenta.
+- Estado: **ambos checkpoints ISIC implementados y fijados por hash**.
 
-### 4. DenseNet201 U-Net de DevBhuyan
+### 4. Archivo H5 de DevBhuyan: descartado tras inspección
 
 - Fuente:
   [DevBhuyan/Skin-Lesion-Segmentation](https://huggingface.co/DevBhuyan/Skin-Lesion-Segmentation).
 - Año: la tarjeta no cita un artículo ni año de entrenamiento; el artefacto
   estaba público y actualizado al corte de 2026.
 - Licencia: Apache-2.0.
-- Framework: Keras/TensorFlow; U-Net con encoder DenseNet201.
+- Framework anunciado: Keras/TensorFlow; la inspección real no encontró U-Net.
 - Checkpoint: `2016_extend_best_model.h5`, aproximadamente 146 MB, presente en
   la rama principal.
 - Dataset: la tarjeta declara ISIC 2016 e ISIC 2017 y métricas auto-reportadas;
@@ -164,10 +163,10 @@ pruebas GPU salvo que una medición local demuestre lo contrario.
   Esa discrepancia debe quedar registrada y no se debe presentar el H5 como dos
   checkpoints.
 - Interfaz: automática, sin prompt.
-- Interés: instalación y carga sencillas; es un buen baseline adicional de CNN
-  densa, pero no hay afirmación específica de robustez al borde circular.
-- Estado propuesto: **primera opción CPU/Keras**, en un entorno separado para no
-  desestabilizar PyTorch.
+- Hallazgo local: el H5 carece de `model_config` y contiene ResNet50, pooling,
+  `flatten` y capas densas. Es un estado de clasificación, no una máscara.
+- Estado: **excluido**; no se implementa una salida ficticia a partir de logits
+  de clasificación.
 
 ### 5. Space de Theodore Ioannidis: SegFormer, U-Net e Inception
 
@@ -182,12 +181,12 @@ pruebas GPU salvo que una medición local demuestre lo contrario.
   `nvidia/segformer-b0-finetuned-ade-512-512` con dos clases.
 - Dataset: el README identifica ISIC 2018 Task 1 y describe evaluación de
   segmentación de lesión.
-- Licencia: **no declarada** en el Space ni en su metadata visible.
+- Licencia: MIT, confirmada por la API del Space.
 - Interfaz: automática, sin prompt.
 - Riesgo: es un proyecto comunitario sin tarjeta formal; la ausencia de licencia
   impide redistribuir código/pesos dentro del repositorio hasta obtener permiso.
-- Estado propuesto: **probar localmente SegFormer**, pero no integrar ni publicar
-  el artefacto mientras la licencia no se aclare.
+- Estado: **U-Net, Inception y SegFormer integrados**, con revisión y hashes
+  fijados.
 
 ### 6. Repositorio Hugging Face de Unixio
 
@@ -198,13 +197,11 @@ pruebas GPU salvo que una medición local demuestre lo contrario.
   - `best_attention_unet.pt`, 126 MB;
   - `best_unet.pt`, 97.9 MB;
   - `best_unetpp.pt`, 105 MB.
-- Licencia: no declarada.
-- Documentación: no existe model card; tampoco se publica allí la clase exacta,
-  normalización, tamaño de entrada, dataset o protocolo de evaluación.
-- Riesgo: tener un `.pt` no basta para reconstruirlo de forma estricta. Sin
-  código/procedencia y licencia no cumple los criterios de la web.
-- Estado propuesto: **en espera**. Solicitar model card, código, dataset,
-  licencia y formato de `state_dict` antes de invertir tiempo de integración.
+- Licencia: MIT, confirmada en el Space asociado.
+- Código: el Space enlaza el repositorio público de BertinAm y contiene las
+  clases exactas, normalización ImageNet, entrada 256 × 256 y configuración.
+- Estado: **U-Net, U-Net++ y Attention U-Net integrados**, con los tres hashes
+  fijados.
 
 ### 7. BiomedParse
 
@@ -357,35 +354,30 @@ el mejor individual en todas las imágenes:
 
 ## Orden de implementación propuesto
 
-1. **Añadir `valid_fov_mask` y las métricas de artefacto** a la web actual. Esto
-   mejora la validez de todos los modelos, incluidos los seis ya implementados.
-2. **DenseNet201 U-Net** en entorno Keras separado: es el checkpoint nuevo más
-   sencillo de auditar en CPU.
-3. **VM-UNet ISIC 2017 e ISIC 2018**: descargar ambos, fijar hashes y evaluar la
-   viabilidad de la ruta CPU.
-4. **De-LightSAM Dermoscopy** en GPU: prioridad para generalización, conservado
-   como categoría automática sin prompt.
-5. **DermoSegDiff-A** en GPU: prioridad para frontera; añadir B/PH2 solo después
-   para prueba cruzada.
-6. **SegFormer del Space** únicamente para prueba local hasta aclarar licencia.
-7. **BiomedParse** como comparador separado con prompt y restricciones de uso.
+1. **Unixio U-Net, U-Net++ y Attention U-Net**: implementados.
+2. **Theodore U-Net, Inception y SegFormer**: implementados.
+3. **VM-UNet ISIC 2017 e ISIC 2018**: implementados con selective scan CPU.
+4. **De-LightSAM Dermoscopy**: implementado como prueba CPU pesada.
+5. **DermoSegDiff-A**: pendiente porque el SharePoint oficial exige acceso.
+6. **BiomedParse**: comparador futuro separado por requerir prompt y aceptación
+   de términos.
 
-Los archivos de Unixio no deben implementarse hasta que el autor publique la
-información mínima de reconstrucción y licencia. Los modelos de la tabla de
-seguimiento se revisarán de nuevo antes de cerrar el experimento por si aparecen
-pesos oficiales.
+Por decisión experimental, la corrección de FOV queda fuera de esta fase: se
+comparan primero las máscaras crudas de cada checkpoint.
 
 ## Criterio de admisión final a la web
 
 Un candidato nuevo entra en `configs/segmentation_models.json` solamente cuando:
 
 1. el checkpoint se descarga desde una URL trazable y se fija su SHA-256;
-2. código y licencia permiten el uso previsto;
+2. código suficiente permite reconstruir la arquitectura y la licencia —o su
+   ausencia— queda visible para decidir el alcance del uso;
 3. el `state_dict` carga estrictamente o se documenta cada transformación;
 4. una imagen real genera una máscara binaria del tamaño original;
 5. una máscara vacía o completa se conserva como resultado revisable, sin romper
    el lote;
-6. se ejecuta el piloto estratificado con y sin corrección de FOV;
+6. se ejecuta primero el piloto estratificado sobre la máscara cruda; la
+   corrección de FOV se evaluará en una fase posterior separada;
 7. la interfaz muestra procedencia, año, licencia, tiempos y memoria;
 8. la revisión no detecta regresiones críticas frente a los modelos actuales.
 

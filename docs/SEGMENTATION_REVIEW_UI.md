@@ -16,20 +16,21 @@ markers, rulers, gel, colour shifts, or transparent dermatoscope-tip artifacts.
 
 ## Model shortlist
 
-The live catalogue contains only runnable, checkpoint-verified variants:
+The live catalogue contains 15 runnable, checkpoint-verified variants:
 
-1. AViT ISIC.
-2. UltraLight VM-UNet.
-3. BA-Transformer ISIC 2016.
-4. U-Net/ResNet34 ISIC 2018.
-5. SkinMamba ISIC 2017.
-6. SkinMamba ISIC 2018.
+1. the original six: AViT, UltraLight VM-UNet, BA-Transformer,
+   U-Net/ResNet34 and SkinMamba ISIC 2017/2018;
+2. Unixio/BertinAm U-Net, U-Net++ and Attention U-Net;
+3. Theodore Ioannidis U-Net, Inception and SegFormer-B0;
+4. VM-UNet ISIC 2017 and ISIC 2018;
+5. De-LightSAM Dermoscopy.
 
-The two SkinMamba entries share an architecture but intentionally retain their
-different training domains. Models without a retrievable public checkpoint were
-removed from the selector. MobileSAM remains a separate prompt-based pilot and
-is not mixed with these prompt-free supervised segmenters. Every candidate,
-download attempt, hash, exclusion and decision is recorded in
+Variants that share an architecture intentionally retain their different
+training domains. Ten are preselected, matching the maximum per run; every
+other verified model remains selectable after unchecking another one. Models
+without a retrievable public checkpoint were removed. MobileSAM remains a
+separate prompt-based pilot and is not mixed with these automatic supervised
+segmenters. Every candidate, download attempt, hash, exclusion and decision is recorded in
 [`SEGMENTATION_CHECKPOINT_AUDIT.md`](SEGMENTATION_CHECKPOINT_AUDIT.md).
 
 ## Adapter contract
@@ -216,6 +217,55 @@ conda run --no-capture-output -n thesis-avit \
 
 CPU inference can be substantially slower than the CUDA kernel. Runtime and RAM
 remain measured per image by the same benchmark process.
+
+## Additional verified ISIC 2018 families
+
+Unixio/BertinAm publishes U-Net, U-Net++ and Attention U-Net checkpoints from
+one ISIC 2018 experiment. Theodore Ioannidis publishes U-Net, Inception and
+SegFormer-B0 from another. All six checkpoints are downloaded from immutable
+Hugging Face revisions and checked with SHA-256:
+
+```bash
+mamba install -n thesis-avit -c conda-forge transformers
+conda run --no-capture-output -n thesis-avit \
+  python -m pip install --no-deps segmentation-models-pytorch==0.5.0
+conda run --no-capture-output -n thesis-avit python scripts/setup_unixio_isic2018.py
+conda run --no-capture-output -n thesis-avit python scripts/setup_theodore_isic2018.py
+```
+
+Theodore's U-Net and Inception use RGB 0–1 at 128 × 128; SegFormer additionally
+uses ImageNet normalization. Unixio models use ImageNet normalization at
+256 × 256 and resize the probability map before thresholding. No variant uses
+automatic morphological cleanup, so the comparison remains attributable to
+the checkpoint.
+
+## VM-UNet on CPU
+
+VM-UNet ISIC 2017 and ISIC 2018 use official Google Drive checkpoints and
+source commit `b87827eb5a5faff00bd4b7b6505e56d3ca813ca2`. The adapter replaces
+the CUDA selective-scan kernel with an equivalent plain-PyTorch recurrence.
+This makes both variants executable without an NVIDIA GPU, but inference may
+take minutes depending on the processor:
+
+```bash
+conda run --no-capture-output -n thesis-avit python scripts/setup_vmunet.py
+```
+
+## De-LightSAM Dermoscopy on CPU
+
+De-LightSAM uses the official dermoscopy member of its six-modality model zoo,
+source commit `d2260d75e4ad1f5da8e053711cd9c36128088a7b`, and modality index zero
+for ISIC. It is automatic: the modality selector is not a spatial prompt. The
+1024 × 1024 TinyViT path is expected to be the slowest CPU candidate, so it is
+available but not preselected:
+
+```bash
+conda run --no-capture-output -n thesis-avit python scripts/setup_delightsam.py
+```
+
+No field-of-view correction or border removal is applied in this phase. The
+original image, lesion prediction and derived clean-skin mask therefore expose
+each model's raw behaviour around dermatoscope circles for manual comparison.
 
 ## Empty clean-skin masks
 

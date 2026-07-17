@@ -124,6 +124,189 @@
         "--source", "{repo_root}/models/skinmamba/source", "--checkpoint",
         "{repo_root}/models/skinmamba/checkpoints/isic18.pth", "--dataset", "isic18"
       ]
+    },
+    {
+      "id": "unixio-unet-isic2018",
+      "name": "U-Net/ResNet34 Unixio (ISIC 2018)",
+      "year": "2026",
+      "license": "MIT",
+      "priority": 7,
+      "recommended": true,
+      "framework": "PyTorch / segmentation-models-pytorch",
+      "resource_profile": "normal",
+      "datasets": ["ISIC 2018"],
+      "checkpoint_status": "public_verified",
+      "integration_status": "ready_after_setup",
+      "repository": "https://github.com/BertinAm/unet-skin-lesion-segmentation",
+      "description": "U-Net con encoder ResNet34 y checkpoint ISIC 2018 reconstruido desde el código público. El autor reporta Dice 0.9056, IoU 0.8291 y HD95 12.46; se verificará de nuevo en la cohorte Fitzpatrick.",
+      "adapter_command": [
+        "{conda}", "run", "--no-capture-output", "-n", "thesis-avit", "python",
+        "{repo_root}/scripts/adapters/unixio_isic2018.py", "--image", "{image}", "--output", "{lesion_mask}",
+        "--checkpoint", "{repo_root}/models/unixio-isic2018/checkpoints/best_unet.pt", "--variant", "unet"
+      ]
+    },
+    {
+      "id": "unixio-unetpp-isic2018",
+      "name": "U-Net++/ResNet34 Unixio (ISIC 2018)",
+      "year": "2026",
+      "license": "MIT",
+      "priority": 8,
+      "recommended": true,
+      "framework": "PyTorch / segmentation-models-pytorch",
+      "resource_profile": "normal",
+      "datasets": ["ISIC 2018"],
+      "checkpoint_status": "public_verified",
+      "integration_status": "ready_after_setup",
+      "repository": "https://github.com/BertinAm/unet-skin-lesion-segmentation",
+      "description": "U-Net++ con rutas de salto densas y encoder ResNet34. Su checkpoint oficial reporta Dice 0.9052, IoU 0.8285 y HD95 12.80 en el test del autor.",
+      "adapter_command": [
+        "{conda}", "run", "--no-capture-output", "-n", "thesis-avit", "python",
+        "{repo_root}/scripts/adapters/unixio_isic2018.py", "--image", "{image}", "--output", "{lesion_mask}",
+        "--checkpoint", "{repo_root}/models/unixio-isic2018/checkpoints/best_unetpp.pt", "--variant", "unetpp"
+      ]
+    },
+    {
+      "id": "theodore-segformer-isic2018",
+      "name": "SegFormer-B0 Theodore (ISIC 2018)",
+      "year": "2025",
+      "license": "MIT",
+      "priority": 9,
+      "recommended": true,
+      "framework": "PyTorch / Transformers",
+      "resource_profile": "ligero/normal",
+      "datasets": ["ISIC 2018 Task 1"],
+      "checkpoint_status": "public_verified",
+      "integration_status": "ready_after_setup",
+      "repository": "https://huggingface.co/spaces/theodore-ioann/Skin-Lesion-Segmentation",
+      "description": "SegFormer-B0 de dos clases entrenado a 128×128 en ISIC 2018. El checkpoint, la arquitectura y la normalización ImageNet se fijaron desde una revisión inmutable del Space.",
+      "adapter_command": [
+        "{conda}", "run", "--no-capture-output", "-n", "thesis-avit", "python",
+        "{repo_root}/scripts/adapters/theodore_isic2018.py", "--image", "{image}", "--output", "{lesion_mask}",
+        "--checkpoint", "{repo_root}/models/theodore-isic2018/checkpoints/segformer.pt", "--variant", "segformer"
+      ]
+    },
+    {
+      "id": "vmunet-isic18",
+      "name": "VM-UNet (ISIC 2018)",
+      "year": "2024",
+      "license": "Apache-2.0",
+      "priority": 10,
+      "recommended": false,
+      "framework": "PyTorch / VMamba",
+      "resource_profile": "pesado (selective scan CPU)",
+      "datasets": ["ISIC 2018"],
+      "checkpoint_status": "public_verified",
+      "integration_status": "ready_after_setup_cpu_reference",
+      "repository": "https://github.com/JCruan519/VM-UNet",
+      "description": "VM-UNet oficial con checkpoint ISIC 2018. Sustituye el kernel CUDA por la misma recurrencia selective-scan escrita en PyTorch; conserva los pesos, pero será notablemente más lento en CPU.",
+      "adapter_command": [
+        "{conda}", "run", "--no-capture-output", "-n", "thesis-avit", "python",
+        "{repo_root}/scripts/adapters/vmunet.py", "--image", "{image}", "--output", "{lesion_mask}",
+        "--source", "{repo_root}/models/vmunet/source", "--checkpoint",
+        "{repo_root}/models/vmunet/checkpoints/best-vmunet-isic18.pth", "--dataset", "isic18"
+      ]
+    },
+    {
+      "id": "unixio-attention-unet-isic2018",
+      "name": "Attention U-Net Unixio (ISIC 2018)",
+      "year": "2026",
+      "license": "MIT",
+      "priority": 11,
+      "recommended": false,
+      "framework": "PyTorch",
+      "resource_profile": "normal/pesado",
+      "datasets": ["ISIC 2018"],
+      "checkpoint_status": "public_verified",
+      "integration_status": "ready_after_setup",
+      "repository": "https://github.com/BertinAm/unet-skin-lesion-segmentation",
+      "description": "Attention U-Net entrenada desde cero con compuertas en las conexiones de salto. El autor reporta Dice 0.8824, inferior a sus U-Net, pero puede producir desacuerdos útiles para revisión.",
+      "adapter_command": [
+        "{conda}", "run", "--no-capture-output", "-n", "thesis-avit", "python",
+        "{repo_root}/scripts/adapters/unixio_isic2018.py", "--image", "{image}", "--output", "{lesion_mask}",
+        "--checkpoint", "{repo_root}/models/unixio-isic2018/checkpoints/best_attention_unet.pt", "--variant", "attention_unet"
+      ]
+    },
+    {
+      "id": "theodore-unet-isic2018",
+      "name": "U-Net Theodore (ISIC 2018)",
+      "year": "2025",
+      "license": "MIT",
+      "priority": 12,
+      "recommended": true,
+      "framework": "PyTorch",
+      "resource_profile": "normal",
+      "datasets": ["ISIC 2018 Task 1"],
+      "checkpoint_status": "public_verified",
+      "integration_status": "ready_after_setup",
+      "repository": "https://huggingface.co/spaces/theodore-ioann/Skin-Lesion-Segmentation",
+      "description": "U-Net compacta de dos clases entrenada a 128×128. Se incluye como variante reproducible del mismo experimento de SegFormer, sin posprocesamiento morfológico automático.",
+      "adapter_command": [
+        "{conda}", "run", "--no-capture-output", "-n", "thesis-avit", "python",
+        "{repo_root}/scripts/adapters/theodore_isic2018.py", "--image", "{image}", "--output", "{lesion_mask}",
+        "--checkpoint", "{repo_root}/models/theodore-isic2018/checkpoints/unet.pt", "--variant", "unet"
+      ]
+    },
+    {
+      "id": "theodore-inception-isic2018",
+      "name": "Inception Theodore (ISIC 2018)",
+      "year": "2025",
+      "license": "MIT",
+      "priority": 13,
+      "recommended": false,
+      "framework": "PyTorch",
+      "resource_profile": "ligero/normal",
+      "datasets": ["ISIC 2018 Task 1"],
+      "checkpoint_status": "public_verified",
+      "integration_status": "ready_after_setup",
+      "repository": "https://huggingface.co/spaces/theodore-ioann/Skin-Lesion-Segmentation",
+      "description": "Segmentador multiescala Inception de dos clases y entrada 128×128. Es rápido y arquitectónicamente distinto, aunque el Space no publica métricas por checkpoint.",
+      "adapter_command": [
+        "{conda}", "run", "--no-capture-output", "-n", "thesis-avit", "python",
+        "{repo_root}/scripts/adapters/theodore_isic2018.py", "--image", "{image}", "--output", "{lesion_mask}",
+        "--checkpoint", "{repo_root}/models/theodore-isic2018/checkpoints/inception.pt", "--variant", "inception"
+      ]
+    },
+    {
+      "id": "vmunet-isic17",
+      "name": "VM-UNet (ISIC 2017)",
+      "year": "2024",
+      "license": "Apache-2.0",
+      "priority": 14,
+      "recommended": false,
+      "framework": "PyTorch / VMamba",
+      "resource_profile": "pesado (selective scan CPU)",
+      "datasets": ["ISIC 2017"],
+      "checkpoint_status": "public_verified",
+      "integration_status": "ready_after_setup_cpu_reference",
+      "repository": "https://github.com/JCruan519/VM-UNet",
+      "description": "La misma VM-UNet con el checkpoint oficial ISIC 2017. Permite medir el cambio de dominio usando una arquitectura idéntica y la ruta CPU de referencia.",
+      "adapter_command": [
+        "{conda}", "run", "--no-capture-output", "-n", "thesis-avit", "python",
+        "{repo_root}/scripts/adapters/vmunet.py", "--image", "{image}", "--output", "{lesion_mask}",
+        "--source", "{repo_root}/models/vmunet/source", "--checkpoint",
+        "{repo_root}/models/vmunet/checkpoints/best-vmunet-isic17.pth", "--dataset", "isic17"
+      ]
+    },
+    {
+      "id": "delightsam-dermoscopy",
+      "name": "De-LightSAM Dermoscopy",
+      "year": "2025",
+      "license": "Apache-2.0",
+      "priority": 15,
+      "recommended": false,
+      "framework": "PyTorch / TinyViT",
+      "resource_profile": "muy pesado en CPU (1024×1024)",
+      "datasets": ["Dermoscopy/ISIC"],
+      "checkpoint_status": "public_verified",
+      "integration_status": "ready_after_setup_cpu_experimental",
+      "repository": "https://github.com/xq141839/De-LightSAM",
+      "description": "Checkpoint oficial ESP-MedSAM específico de dermoscopia, sin prompt espacial manual. Se adaptó a CPU conservando la selección de modalidad ISIC; cada imagen puede tardar bastante.",
+      "adapter_command": [
+        "{conda}", "run", "--no-capture-output", "-n", "thesis-avit", "python",
+        "{repo_root}/scripts/adapters/delightsam.py", "--image", "{image}", "--output", "{lesion_mask}",
+        "--source", "{repo_root}/models/delightsam/source", "--checkpoint",
+        "{repo_root}/models/delightsam/checkpoints/ESP_isic_best.pth"
+      ]
     }
   ]
 }

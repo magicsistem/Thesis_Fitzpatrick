@@ -53,6 +53,18 @@ conectarlos a la web.
 | U-Net/ResNet34 ISIC 2018 | Sí | Implementado | Revisión inmutable y hash verificados |
 | SkinMamba ISIC 2017 | Sí | Implementado | Checkpoint oficial verificado; selective scan adaptado a CPU |
 | SkinMamba ISIC 2018 | Sí | Implementado | Checkpoint oficial verificado; selective scan adaptado a CPU |
+| Unixio U-Net ISIC 2018 | Sí | Implementado | Código MIT, revisión HF y hash verificados |
+| Unixio U-Net++ ISIC 2018 | Sí | Implementado | Código MIT, revisión HF y hash verificados |
+| Unixio Attention U-Net ISIC 2018 | Sí | Implementado | Arquitectura pública y estado `model_state` verificados |
+| Theodore U-Net ISIC 2018 | Sí | Implementado | Space MIT fijado y checkpoint verificado |
+| Theodore Inception ISIC 2018 | Sí | Implementado | Space MIT fijado y checkpoint verificado |
+| Theodore SegFormer-B0 ISIC 2018 | Sí | Implementado | Space MIT fijado y checkpoint verificado |
+| VM-UNet ISIC 2017 | Sí | Implementado | Checkpoint oficial y ruta selective-scan CPU |
+| VM-UNet ISIC 2018 | Sí | Implementado | Checkpoint oficial y ruta selective-scan CPU |
+| De-LightSAM Dermoscopy | Sí | Implementado | ZIP oficial, checkpoint ISIC y commit verificados |
+| DermoSegDiff-A/B | No recuperable hoy | No implementado | SharePoint oficial redirige a una respuesta 401 |
+| DevBhuyan `2016_extend_best_model.h5` | No es segmentador | No implementado | H5 de solo pesos para clasificador ResNet50/densas |
+| BiomedParse | Acceso condicionado | No implementado | Requiere aceptar términos e iniciar sesión |
 | ISCF ISIC 2017/2018 | No recuperable | No implementado | Los dos enlaces oficiales rechazaron la descarga |
 | TMUNet | No verificable | No implementado | Repositorio original ya no existe |
 | Attention DeepLabv3+ | No verificable | No implementado | Repositorio original ya no existe |
@@ -165,6 +177,107 @@ conectarlos a la web.
 - Se presentan como dos variantes separadas para que la revisión pueda comparar
   el efecto de entrenar en ISIC 2017 frente a ISIC 2018.
 - Decisión: **ambos checkpoints incluidos en la web**.
+
+## Unixio/BertinAm: U-Net, U-Net++ y Attention U-Net (implementados)
+
+- Fuentes:
+  <https://github.com/BertinAm/unet-skin-lesion-segmentation> y
+  <https://huggingface.co/unixio/unet-skin-lesion-segmentation>.
+- Se comprobó además el Space asociado, revisión
+  `c6c8c0d1e588cd9966ff0bdffcfbe54d2e9ccd2d`, que publica el código de
+  inferencia, configuración 256 × 256, normalización ImageNet y licencia MIT.
+- Los pesos se descargaron desde la revisión inmutable del modelo
+  `2a8b59e2de58d87370a92956cdea250ddf95531d`:
+  - `best_unet.pt`, 97,921,547 bytes, SHA-256
+    `99bf0a32d36ac28a42db1299af6a0ad4d562efdf685cf3fcdccd3ae8f94d1448`;
+  - `best_unetpp.pt`, 104,526,675 bytes, SHA-256
+    `d2ba5876ffd449f426205d8498b1165618ee0159a286bfa701ff2492544ca269`;
+  - `best_attention_unet.pt`, 125,682,667 bytes, SHA-256
+    `0d41ac498ac44d2b07ea88ef75f92370ec5312d7e6d32c39f9f0a0ce12b4812b`.
+- `torch.load` mostró un diccionario con `model_state` y `config`. U-Net y
+  U-Net++ se reconstruyen con `segmentation-models-pytorch==0.5.0`, encoder
+  ResNet34 sin volver a descargar ImageNet. Attention U-Net reproduce las
+  cuatro compuertas y nombres de módulos del código publicado.
+- El adaptador interpola el mapa de probabilidad al tamaño original antes del
+  umbral 0.5, igual que el predictor oficial. No aplica limpieza morfológica.
+- Decisión: **las tres variantes se incluyen en la web**.
+
+## Theodore Ioannidis: U-Net, Inception y SegFormer (implementados)
+
+- Fuente: <https://huggingface.co/spaces/theodore-ioann/Skin-Lesion-Segmentation>.
+- La API de Hugging Face confirmó licencia MIT. Se fijó la revisión completa
+  `171a6dc86ee73faae0fdbda0f157d92bdb1c6596` y se inspeccionaron
+  `supervised.py`, `utils.py` y el flujo real de la aplicación.
+- Checkpoints:
+  - `unet.pt`, 30,861,979 bytes, SHA-256
+    `d58601e6433b7ebeab5ec4249ca02e413b62b28cd9e69b1719a368cb6deae5bb`;
+  - `inception.pt`, 14,355,657 bytes, SHA-256
+    `18c17a1d87be5906b31a76558132e3c3fc16e643747b8e0859c25cb914eadce9`;
+  - `segformer.pt`, 14,946,661 bytes, SHA-256
+    `0dcb4e5c9d19ab4caffaa324e4cf26090bcc9d37fb47840e38d81268691d8341`.
+- Las tres redes producen dos clases a 128 × 128 y la lesión es la clase 1 por
+  `argmax`. U-Net e Inception reciben tensor RGB 0–1; SegFormer añade la
+  normalización ImageNet de su procesador oficial. El adaptador no descarga el
+  backbone ADE en inferencia: construye la configuración B0 y carga el estado
+  final completo con `strict=True`.
+- Decisión: **las tres variantes se incluyen en la web**.
+
+## VM-UNet ISIC 2017 e ISIC 2018 (implementados)
+
+- Fuente: <https://github.com/JCruan519/VM-UNet>, licencia Apache-2.0 y commit
+  fijado `b87827eb5a5faff00bd4b7b6505e56d3ca813ca2`.
+- Se enumeró la carpeta Google Drive del README y se descargaron los dos
+  archivos finales, no los `.whl` CUDA ni los encoders genéricos:
+  - `best-vmunet-isic17.pth`, 109,836,533 bytes, SHA-256
+    `61af065274210838ed65d165bd908a0b831ec6be8f2739c60e990fcfdd1071ce`;
+  - `best-vmunet-isic18.pth`, 109,836,533 bytes, SHA-256
+    `a5b2c175ccb2e2fa428004a1c90023ffd80ef3a9d9c485f7f77ccbe4427abd38`.
+- La inspección del contenedor confirmó parámetros `vmunet.*` y buffers THOP
+  `total_ops`/`total_params`. Solo esos buffers de perfilado y un posible
+  prefijo `module.` se retiran antes de la carga estricta.
+- Se reprodujeron la configuración `[2,2,2,2]`, decoder `[2,2,2,1]`, entrada
+  256 × 256 y normalización min-max oficial. El kernel CUDA de VMamba se
+  reemplaza por la recurrencia selective-scan equivalente escrita en PyTorch.
+  Esta ruta conserva los pesos y admite CPU, pero puede ser muy lenta.
+- Decisión: **ambos checkpoints se incluyen como variantes separadas**.
+
+## De-LightSAM Dermoscopy (implementado)
+
+- Fuente: <https://github.com/xq141839/De-LightSAM>, licencia Apache-2.0 y
+  commit fijado `d2260d75e4ad1f5da8e053711cd9c36128088a7b`.
+- Se descargó el ZIP oficial de Google Drive, 308,302,182 bytes, SHA-256
+  `837e3f4654abe849aa634be2da3864b09d3b2a22f16b8178815afede187b0c9f`.
+  `unzip -l` mostró seis modalidades. Se extrajo únicamente
+  `ESP-MedSAM/ESP_isic_best.pth`, 51,383,697 bytes, SHA-256
+  `79555730abffb5b39bef5d59afb7b89b13468348b77efa144649b90fddc01778`.
+- El evaluador selecciona dermoscopia con `domain_seq=0`; no requiere punto ni
+  caja manual. El adaptador elimina las llamadas `.cuda()` del evaluador, no
+  del modelo, y ejecuta TinyViT/decoder en CPU a 1024 × 1024.
+- Se preservó incluso la normalización efectiva del `BinaryLoader` oficial,
+  que por error usa `pixel_mean` también como divisor. Cambiarla habría
+  alterado la distribución con la que se entrenó el checkpoint.
+- Decisión: **incluido como experimento automático muy pesado en CPU**.
+
+## DermoSegDiff (no implementado por descarga bloqueada)
+
+- Fuente: <https://github.com/xmindflow/DermoSegDiff>, licencia MIT.
+- El README enlaza carpetas SharePoint para DermoSegDiff-A/ISIC18 y B/PH2. Se
+  siguió la redirección del enlace público oficial; el destino respondió HTTP
+  401 y exigió autenticación. Sin bytes no se puede fijar hash ni verificar la
+  carga.
+- Decisión: **no se muestra como ejecutable** hasta que el autor restaure una
+  descarga anónima o publique los archivos en un repositorio versionado.
+
+## DevBhuyan `2016_extend_best_model.h5` (excluido: no es segmentador)
+
+- Fuente: <https://huggingface.co/DevBhuyan/Skin-Lesion-Segmentation>, revisión
+  `d2cff8f1edd7aef351ce5967e901c2e190a57c7e`.
+- Se descargó el H5 de 146,031,800 bytes; SHA-256
+  `598edaf686f3334adfa71b17ca2993fd70df88c4e6a2d27a31d24dd03294b57d`.
+- La inspección HDF5 reveló `keras_version=2.11.0`, ausencia de `model_config`
+  y capas `resnet50`, `flatten`, global pooling y varias `dense`. No hay decoder
+  U-Net ni salida espacial; es un archivo de solo pesos para clasificación.
+- Decisión: **no implementado**, aunque la tarjeta lo denomine segmentación.
 
 ## ISCF (no implementado)
 
@@ -314,7 +427,7 @@ conectarlos a la web.
 
 ## Reproducción de los modelos incluidos
 
-Con `thesis-avit` creado, los cinco instaladores/checkpoints se preparan así:
+Con `thesis-avit` creado, todos los instaladores/checkpoints se preparan así:
 
 ```bash
 conda run --no-capture-output -n thesis-avit python scripts/setup_avit_model.py
@@ -324,6 +437,11 @@ conda run --no-capture-output -n thesis-avit \
   python -m pip install --no-deps segmentation-models-pytorch==0.5.0
 conda run --no-capture-output -n thesis-avit python scripts/setup_unet_resnet34.py
 conda run --no-capture-output -n thesis-avit python scripts/setup_skinmamba.py
+mamba install -n thesis-avit -c conda-forge transformers
+conda run --no-capture-output -n thesis-avit python scripts/setup_unixio_isic2018.py
+conda run --no-capture-output -n thesis-avit python scripts/setup_theodore_isic2018.py
+conda run --no-capture-output -n thesis-avit python scripts/setup_vmunet.py
+conda run --no-capture-output -n thesis-avit python scripts/setup_delightsam.py
 ```
 
 Los pesos y clones externos viven bajo `models/` y permanecen excluidos de Git;
