@@ -26,8 +26,9 @@ The live catalogue contains 15 runnable, checkpoint-verified variants:
 5. De-LightSAM Dermoscopy.
 
 Variants that share an architecture intentionally retain their different
-training domains. Ten are preselected, matching the maximum per run; every
-other verified model remains selectable after unchecking another one. Models
+training domains. Ten remain preselected as a practical starting point, while
+the “Seleccionar todos” control enables the complete catalogue without having
+to uncheck another model. Models
 without a retrievable public checkpoint were removed. MobileSAM remains a
 separate prompt-based pilot and is not mixed with these automatic supervised
 segmenters. Every candidate, download attempt, hash, exclusion and decision is recorded in
@@ -70,7 +71,8 @@ python scripts/serve_segmentation_review.py --host 127.0.0.1 --port 8000
 Open <http://127.0.0.1:8000>. The page can create an exact Fitzpatrick-balanced
 sample from the locally downloaded full cohort. The requested total must be a
 multiple of six; 12 therefore means two images from every type I–VI. The seed
-makes the selection reproducible. Up to 10 models can be selected. In the
+makes the selection reproducible. Any subset or all models can be selected; the
+page provides controls to select or clear the complete catalogue. In the
 results, first select one model and then move image by image within that model.
 Every slide displays:
 

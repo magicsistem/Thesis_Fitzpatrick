@@ -7,7 +7,7 @@ import sys
 import threading
 import unittest
 from unittest.mock import patch
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 import numpy as np
 from PIL import Image
@@ -74,6 +74,37 @@ class ReviewServerTests(unittest.TestCase):
             page = response.read().decode("utf-8")
         self.assertIn("Comparación de máscaras", page)
         self.assertIn("id=\"carousel\"", page)
+        self.assertIn("id=\"select-all-models\"", page)
+
+    def test_inference_accepts_every_catalogued_model(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            image_path = root / "input.jpg"
+            Image.fromarray(np.full((32, 32, 3), [120, 85, 65], dtype=np.uint8)).save(image_path)
+            results = root / "results"
+            model_ids = [model["id"] for model in review.load_models()]
+            for model_id in model_ids:
+                lesion_path = results / model_id / "image" / "lesion_mask.png"
+                lesion_path.parent.mkdir(parents=True)
+                lesion = np.zeros((32, 32), dtype=np.uint8)
+                lesion[12:20, 12:20] = 255
+                Image.fromarray(lesion).save(lesion_path)
+            image_record = {"id": "image", "url": "/files/input/input.jpg"}
+            request = Request(
+                f"{self.base_url}/api/infer",
+                data=json.dumps({"model_ids": model_ids, "image_ids": ["image"]}).encode(),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with (
+                patch.object(review, "RESULTS_DIR", results),
+                patch.object(review, "list_images", return_value=[image_record]),
+                patch.object(review, "image_path", return_value=image_path),
+                urlopen(request) as response,
+            ):
+                payload = json.load(response)
+            self.assertEqual(len(payload["results"]), len(model_ids))
+            self.assertTrue(all(item["status"] == "ready" for item in payload["results"]))
 
     def test_ready_result_writes_skin_mask_and_statistics(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

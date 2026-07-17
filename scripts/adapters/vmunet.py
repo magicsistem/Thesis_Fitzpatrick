@@ -68,6 +68,8 @@ def normalize_state_dict(payload: object) -> dict:
     normalized = {}
     for key, value in state.items():
         clean = key.removeprefix("module.")
+        if clean in {"total_ops", "total_params"}:
+            continue
         if clean.endswith(".total_ops") or clean.endswith(".total_params"):
             continue
         normalized[clean] = value

@@ -452,8 +452,8 @@ class ReviewHandler(SimpleHTTPRequestHandler):
             images = {image["id"]: image for image in list_images()}
             if not requested_models or not requested_images:
                 raise ValueError("Selecciona al menos un modelo y una imagen.")
-            if len(requested_models) > 10:
-                raise ValueError("El máximo es 10 modelos por ejecución.")
+            if len(requested_models) != len(set(requested_models)):
+                raise ValueError("La selección contiene modelos duplicados.")
 
             results = []
             for model_id in requested_models:

@@ -33,7 +33,7 @@ Do not mix all dependencies into a single environment unless explicitly justifie
 
 ## Segmentation review interface
 
-The local review interface compares up to 10 segmentation models over downloaded
+The local review interface can compare every available segmentation model over downloaded
 images joined to the complete Fitzpatrick metadata. It can build reproducible,
 balanced samples in multiples of six: for example, 12 selects exactly two local
 images of each Fitzpatrick type I–VI. Each result displays the original image, a

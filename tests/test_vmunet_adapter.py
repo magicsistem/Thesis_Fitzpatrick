@@ -23,7 +23,13 @@ class VMUNetAdapterTests(unittest.TestCase):
 
     def test_state_normalization_removes_profiling_buffers(self) -> None:
         state = vmunet.normalize_state_dict(
-            {"module.layer.weight": "weight", "module.layer.total_ops": "ops"}
+            {
+                "total_ops": "root ops",
+                "total_params": "root params",
+                "module.layer.weight": "weight",
+                "module.layer.total_ops": "nested ops",
+                "module.layer.total_params": "nested params",
+            }
         )
         self.assertEqual(state, {"layer.weight": "weight"})
 

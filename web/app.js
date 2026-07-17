@@ -165,6 +165,14 @@ async function initialize() {
 }
 
 $("#sample-images").addEventListener("click", () => sampleImages().catch((error) => { $("#pool-status").textContent = error.message; }));
+$("#select-all-models").addEventListener("click", () => {
+  document.querySelectorAll(".model-check").forEach((input) => { input.checked = true; });
+  updateCounts();
+});
+$("#clear-models").addEventListener("click", () => {
+  document.querySelectorAll(".model-check").forEach((input) => { input.checked = false; });
+  updateCounts();
+});
 $("#clear-images").addEventListener("click", () => { document.querySelectorAll(".image-check").forEach((i) => { i.checked = false; }); updateCounts(); });
 $("#run").addEventListener("click", runReview);
 $("#previous").addEventListener("click", () => { state.slide -= 1; renderSlide(); });
