@@ -16,23 +16,21 @@ markers, rulers, gel, colour shifts, or transparent dermatoscope-tip artifacts.
 
 ## Model shortlist
 
-The first five models to integrate and test are:
+The live catalogue contains only runnable, checkpoint-verified variants:
 
-1. AViT.
+1. AViT ISIC.
 2. UltraLight VM-UNet.
-3. BA-Transformer.
-4. U-Net/ResNet34 (ISIC 2018).
-5. UCM-Net.
+3. BA-Transformer ISIC 2016.
+4. U-Net/ResNet34 ISIC 2018.
+5. SkinMamba ISIC 2017.
+6. SkinMamba ISIC 2018.
 
-ISCF, SkinMamba, EGE-UNet, MALUNet, and MobileSAM are secondary
-comparators. MobileSAM remains a prompt-based baseline and must not be mixed
-conceptually with the prompt-free supervised segmenters. TMUNet, Attention
-DeepLabv3+, and BCDU-Net were removed from the live catalogue after GitHub
-reported their original repositories as unavailable on 2026-07-16.
-
-The catalogue at `configs/segmentation_models.json` distinguishes public
-checkpoint availability from local integration. A model is not runnable until
-its adapter has been reproduced and validated.
+The two SkinMamba entries share an architecture but intentionally retain their
+different training domains. Models without a retrievable public checkpoint were
+removed from the selector. MobileSAM remains a separate prompt-based pilot and
+is not mixed with these prompt-free supervised segmenters. Every candidate,
+download attempt, hash, exclusion and decision is recorded in
+[`SEGMENTATION_CHECKPOINT_AUDIT.md`](SEGMENTATION_CHECKPOINT_AUDIT.md).
 
 ## Adapter contract
 
@@ -201,10 +199,23 @@ conda run --no-capture-output -n thesis-avit \
 `--no-deps` deliberately preserves the already verified CPU builds of PyTorch,
 Torchvision, timm, Hugging Face Hub, and safetensors in `thesis-avit`.
 
-ISCF remains in the catalogue because it is a relevant research comparator,
-but it is not marked runnable: on 2026-07-16 both official Google Drive weight
-links rejected automated retrieval. The interface will not pretend those
-weights are available.
+## SkinMamba on CPU
+
+SkinMamba is exposed as separate ISIC 2017 and ISIC 2018 variants. The setup
+script pins the Apache-2.0 source to commit
+`131a85da14da4d3bf135b52912d274191c05f3b8`, downloads the authors' ZIP once,
+and verifies the archive plus both 54 MB checkpoints. The official model imports
+a CUDA selective-scan extension; the adapter uses the repository's equivalent
+chunked PyTorch recurrence, which keeps inference available on this CPU-only
+machine without changing learned parameters.
+
+```bash
+conda run --no-capture-output -n thesis-avit \
+  python scripts/setup_skinmamba.py
+```
+
+CPU inference can be substantially slower than the CUDA kernel. Runtime and RAM
+remain measured per image by the same benchmark process.
 
 ## Empty clean-skin masks
 

@@ -35,16 +35,19 @@ class ReviewServerTests(unittest.TestCase):
         cls.server.server_close()
         cls.thread.join(timeout=2)
 
-    def test_state_lists_ten_models_with_provenance(self) -> None:
+    def test_state_lists_only_six_runnable_checkpoint_variants(self) -> None:
         with urlopen(f"{self.base_url}/api/state") as response:
             payload = json.load(response)
-        self.assertEqual(len(payload["models"]), 10)
-        self.assertEqual(sum(model["recommended"] for model in payload["models"]), 5)
+        self.assertEqual(len(payload["models"]), 6)
+        self.assertEqual(sum(model["recommended"] for model in payload["models"]), 6)
         for model in payload["models"]:
             self.assertTrue(model["year"])
             self.assertTrue(model["license"])
             self.assertTrue(model["repository"].startswith("https://github.com/"))
             self.assertTrue(model["description"])
+            self.assertTrue(model["resource_profile"])
+            self.assertIsNotNone(model["adapter_command"])
+            self.assertIn("verified", model["checkpoint_status"])
         self.assertIn("pool", payload)
 
     def test_stratified_sample_balances_six_fitzpatrick_types(self) -> None:

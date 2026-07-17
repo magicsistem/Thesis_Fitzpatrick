@@ -51,4 +51,7 @@ python scripts/serve_segmentation_review.py
 
 Open <http://127.0.0.1:8000>. See
 [`docs/SEGMENTATION_REVIEW_UI.md`](docs/SEGMENTATION_REVIEW_UI.md) for the model
-shortlist, adapter contract, post-processing rules, and Fitzpatrick caveat.
+shortlist, adapter contract, post-processing rules, and Fitzpatrick caveat. The
+complete checkpoint search—including every rejected model, download attempt,
+fixed commit and SHA-256—is in
+[`docs/SEGMENTATION_CHECKPOINT_AUDIT.md`](docs/SEGMENTATION_CHECKPOINT_AUDIT.md).

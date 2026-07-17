@@ -18,8 +18,9 @@ function renderModels() {
     <label class="model-card">
       <input class="model-check" type="checkbox" value="${model.id}" ${model.recommended ? "checked" : ""}>
       <span class="model-name">${model.name}</span>
-      ${model.recommended ? '<span class="badge">TOP 5</span>' : ""}
+      ${model.recommended ? '<span class="badge">CHECKPOINT VERIFICADO</span>' : ""}
       <span class="model-meta">${model.year} · ${model.license} · ${model.framework}</span>
+      <span class="model-meta">Perfil: ${model.resource_profile}</span>
       <span class="model-meta">Datos: ${model.datasets.join(", ")}</span>
       <span class="model-reason">${model.description}</span>
       <a class="repo-link" href="${model.repository}" target="_blank" rel="noreferrer" onclick="event.stopPropagation()">Abrir GitHub ↗</a>
