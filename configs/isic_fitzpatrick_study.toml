@@ -77,12 +77,17 @@ candidate_models = [
   "UltraLight VM-UNet",
   "BA-Transformer",
   "U-Net/ResNet34 (ISIC 2018)",
-  "UCM-Net",
-  "ISCF",
-  "SkinMamba",
-  "EGE-UNet",
-  "MALUNet",
-  "MobileSAM baseline"
+  "SkinMamba (ISIC 2017)",
+  "SkinMamba (ISIC 2018)",
+  "U-Net/ResNet34 Unixio (ISIC 2018)",
+  "U-Net++/ResNet34 Unixio (ISIC 2018)",
+  "SegFormer-B0 Theodore (ISIC 2018)",
+  "VM-UNet (ISIC 2018)",
+  "Attention U-Net Unixio (ISIC 2018)",
+  "U-Net Theodore (ISIC 2018)",
+  "Inception Theodore (ISIC 2018)",
+  "VM-UNet (ISIC 2017)",
+  "De-LightSAM Dermoscopy"
 ]
 mask_validation_required = true
 use_generated_masks_for_training_without_validation = false

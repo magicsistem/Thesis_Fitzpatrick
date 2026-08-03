@@ -265,9 +265,12 @@ available but not preselected:
 conda run --no-capture-output -n thesis-avit python scripts/setup_delightsam.py
 ```
 
-No field-of-view correction or border removal is applied in this phase. The
-original image, lesion prediction and derived clean-skin mask therefore expose
+No field-of-view correction or border removal is applied to the lesion
+prediction in this phase. The original image and lesion mask therefore expose
 each model's raw behaviour around dermatoscope circles for manual comparison.
+The separately derived clean-skin mask does exclude nearly black background
+pixels so they are not included in colour statistics; that exclusion does not
+alter `lesion_mask.png`.
 
 ## Empty clean-skin masks
 

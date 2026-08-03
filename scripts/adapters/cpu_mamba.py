@@ -85,4 +85,3 @@ class Mamba(nn.Module):
 
         scanned = torch.stack(outputs, dim=2).transpose(1, 2)
         return self.out_proj(scanned)
-

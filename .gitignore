@@ -21,14 +21,12 @@ data/external/*
 !data/raw/.gitkeep
 !data/interim/.gitkeep
 !data/processed/.gitkeep
-!data/external/.gitkeep
 
 # Results: keep folders, not heavy outputs
 results/*
 reports/figures/*
 reports/tables/*
 !results/.gitkeep
-!reports/figures/.gitkeep
 !reports/tables/.gitkeep
 
 # Model checkpoints / weights

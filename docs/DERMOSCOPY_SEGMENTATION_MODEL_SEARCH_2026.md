@@ -183,8 +183,9 @@ CPU de referencia, aunque previsiblemente lenta.
   segmentación de lesión.
 - Licencia: MIT, confirmada por la API del Space.
 - Interfaz: automática, sin prompt.
-- Riesgo: es un proyecto comunitario sin tarjeta formal; la ausencia de licencia
-  impide redistribuir código/pesos dentro del repositorio hasta obtener permiso.
+- Riesgo: es un proyecto comunitario y sus métricas no constituyen una
+  validación independiente. La API del Space sí declara licencia MIT; los pesos
+  permanecen fuera de este repositorio y se descargan desde una revisión fijada.
 - Estado: **U-Net, Inception y SegFormer integrados**, con revisión y hashes
   fijados.
 
