@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -24,7 +25,12 @@ def main() -> None:
     if method is None: raise SystemExit("Método desconocido")
     if method["method_id"] == "S16": result = {"method_id": "S16", "parameter_count": 0, "checkpoint_bytes": 0, "device": "cpu"}
     elif not args.internal:
-        command = ["conda", "run", "--no-capture-output", "-n", "thesis-avit", "python", str(Path(__file__).resolve()), "--method", args.method, "--internal"]
+        adapter_python = os.environ.get("THESIS_ADAPTER_PYTHON")
+        command = [adapter_python or "conda"]
+        if adapter_python:
+            command += [str(Path(__file__).resolve()), "--method", args.method, "--internal"]
+        else:
+            command += ["run", "--no-capture-output", "-n", "thesis-avit", "python", str(Path(__file__).resolve()), "--method", args.method, "--internal"]
         completed = subprocess.run(command, cwd=REPO_ROOT, capture_output=True, text=True)
         if completed.returncode: raise SystemExit(completed.stderr or completed.stdout)
         start = completed.stdout.rfind("\n{")

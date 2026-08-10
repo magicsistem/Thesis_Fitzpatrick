@@ -8,10 +8,12 @@ import importlib.util
 from pathlib import Path
 import sys
 import types
+import time
 
 import numpy as np
 from PIL import Image, ImageOps
 from _checkpoint import verify_checkpoint
+from _runtime import timed_forward, write_metrics
 
 
 CHECKPOINT_SHA256 = "79555730abffb5b39bef5d59afb7b89b13468348b77efa144649b90fddc01778"
@@ -34,7 +36,7 @@ def preprocess(image: Image.Image) -> np.ndarray:
     return np.ascontiguousarray((values - OFFICIAL_PIXEL_MEAN) / OFFICIAL_PIXEL_MEAN)
 
 
-def load_model(source: Path, checkpoint: Path):
+def load_model(source: Path, checkpoint: Path, device: str = "cpu"):
     if not (source / "model.py").is_file():
         raise FileNotFoundError(
             f"No se encontró De-LightSAM en {source}. Ejecuta scripts/setup_delightsam.py."
@@ -57,20 +59,22 @@ def load_model(source: Path, checkpoint: Path):
     except TypeError:
         state = torch.load(checkpoint, map_location="cpu")
     model.load_state_dict(state, strict=True)
-    model.eval()
+    model.to(device).eval()
     return torch, model
 
 
-def infer(image_path: Path, output_path: Path, source: Path, checkpoint: Path) -> None:
-    torch, model = load_model(source, checkpoint)
+def infer(image_path: Path, output_path: Path, source: Path, checkpoint: Path, device: str = "cpu") -> None:
+    load_started = time.perf_counter(); torch, model = load_model(source, checkpoint, device)
+    load_time_ms = (time.perf_counter() - load_started) * 1000
     with Image.open(image_path) as opened:
         image = ImageOps.exif_transpose(opened).convert("RGB")
     original_size = image.size
     values = preprocess(image)
-    tensor = torch.from_numpy(values).permute(2, 0, 1).unsqueeze(0).float()
-    with torch.inference_mode():
-        logits, _, _ = model(x=tensor, domain_seq=0)
-        mask = (torch.sigmoid(logits)[0, 0] >= 0.5).to(torch.uint8).cpu().numpy() * 255
+    tensor = torch.from_numpy(values).permute(2, 0, 1).unsqueeze(0).to(device=device, dtype=torch.float32)
+    output, inference_time_ms, warmup = timed_forward(torch, device, lambda: model(x=tensor, domain_seq=0))
+    logits, _, _ = output
+    mask = (torch.sigmoid(logits)[0, 0] >= 0.5).to(torch.uint8).cpu().numpy() * 255
+    write_metrics(torch, device, load_time_ms=load_time_ms, inference_time_ms=inference_time_ms, warmup=warmup)
     result = Image.fromarray(mask, mode="L").resize(original_size, Image.Resampling.NEAREST)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     result.save(output_path)
@@ -82,13 +86,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--source", required=True, type=Path)
     parser.add_argument("--checkpoint", required=True, type=Path)
+    parser.add_argument("--device", choices=("cpu", "cuda"), default="cpu")
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
     infer(
-        args.image.resolve(), args.output.resolve(), args.source.resolve(), args.checkpoint.resolve()
+        args.image.resolve(), args.output.resolve(), args.source.resolve(), args.checkpoint.resolve(), args.device
     )
 
 

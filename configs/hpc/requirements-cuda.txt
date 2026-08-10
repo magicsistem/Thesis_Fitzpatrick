@@ -1,0 +1,6 @@
+# Installed into .cedia/venv with --system-site-packages inside the NGC 24.01 SIF.
+# Core CUDA packages (torch, torchvision, numpy) come from the read-only image.
+gdown==5.2.0
+segmentation-models-pytorch==0.5.0
+timm==0.9.16
+transformers==4.40.2

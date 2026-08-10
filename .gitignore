@@ -9,6 +9,7 @@ __pycache__/
 
 # Environments
 .venv/
+.cedia/
 .env/
 *.env
 conda-meta/
@@ -60,6 +61,9 @@ models/
 # Logs
 logs/
 *.log
+cedia_environment_*.txt
+slurm-*.out
+slurm-*.err
 
 # OS/editor
 .DS_Store

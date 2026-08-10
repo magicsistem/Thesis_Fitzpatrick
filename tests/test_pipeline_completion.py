@@ -24,7 +24,7 @@ from thesis_fitzpatrick.reporting import aggregate, paired_comparisons, write_re
 from thesis_fitzpatrick.yolo import bbox_from_mask, bbox_to_darknet, darknet_to_bbox, patch_yolov3_cfg, prepare_darknet_fold, select_validation_configuration
 from thesis_fitzpatrick.benchmark import content_hash, sha256_file
 import sealed_test
-from setup_yolov3_darknet import cpu_build_command
+from setup_yolov3_darknet import cpu_build_command, gpu_build_command
 
 
 class DatasetAndYoloTests(unittest.TestCase):
@@ -43,6 +43,12 @@ class DatasetAndYoloTests(unittest.TestCase):
     def test_darknet_cpu_build_disables_upstream_gpu_defaults(self):
         command = cpu_build_command(2)
         self.assertIn("GPU=0", command); self.assertIn("CUDNN=0", command); self.assertIn("OPENCV=0", command); self.assertIn("-j2", command)
+
+    def test_darknet_gpu_build_targets_one_a100(self):
+        command = gpu_build_command(8)
+        self.assertIn("GPU=1", command); self.assertIn("CUDNN=1", command)
+        self.assertTrue(any("arch=compute_80,code=[sm_80,compute_80]" in token for token in command))
+        self.assertNotIn("-gpus", command)
 
     def test_resumable_download_identifies_client_for_official_hosts(self):
         class Response(io.BytesIO):
@@ -130,8 +136,10 @@ class DatasetAndYoloTests(unittest.TestCase):
 
     def test_yolov3_cfg_replaces_coco_schedule_for_one_class(self):
         with tempfile.TemporaryDirectory() as directory:
-            output = Path(directory) / "lesion.cfg"
-            patch_yolov3_cfg(REPO_ROOT / "models/yolov3-darknet/source/cfg/yolov3.cfg", output)
+            root = Path(directory); output = root / "lesion.cfg"; source = root / "yolov3.cfg"
+            head = "[net]\nbatch=1\nsubdivisions=1\nwidth=416\nheight=416\nlearning_rate=0.001\nmomentum=0.9\ndecay=0.0005\nmax_batches=500200\nsteps=400000,450000\n"
+            source.write_text(head + "\n".join("[convolutional]\nfilters=255\n[yolo]\nclasses=80\n" for _ in range(3)), encoding="utf-8")
+            patch_yolov3_cfg(source, output)
             text = output.read_text(encoding="utf-8")
             self.assertIn("max_batches=6000", text); self.assertIn("steps=4800,5400", text)
             self.assertEqual(text.count("classes=1"), 3); self.assertEqual(text.count("filters=18"), 3)

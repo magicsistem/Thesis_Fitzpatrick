@@ -18,7 +18,7 @@
         "{conda}", "run", "--no-capture-output", "-n", "thesis-avit", "python",
         "{repo_root}/scripts/adapters/avit.py", "--image", "{image}", "--output", "{lesion_mask}",
         "--source", "{repo_root}/models/avit/source", "--checkpoint",
-        "{repo_root}/models/avit/checkpoints/AViT_ViT_B_ISIC_best.pth", "--device", "cpu"
+        "{repo_root}/models/avit/checkpoints/AViT_ViT_B_ISIC_best.pth", "--device", "{device}"
       ]
     },
     {
@@ -39,7 +39,7 @@
         "{conda}", "run", "--no-capture-output", "-n", "thesis-avit", "python",
         "{repo_root}/scripts/adapters/ultralight_vm_unet.py", "--image", "{image}", "--output", "{lesion_mask}",
         "--source", "{repo_root}/models/ultralight-vm-unet/source", "--checkpoint",
-        "{repo_root}/models/ultralight-vm-unet/checkpoints/UltraLight_VM_UNet.pth"
+        "{repo_root}/models/ultralight-vm-unet/checkpoints/UltraLight_VM_UNet.pth", "--device", "{device}"
       ]
     },
     {
@@ -60,7 +60,7 @@
         "{conda}", "run", "--no-capture-output", "-n", "thesis-avit", "python",
         "{repo_root}/scripts/adapters/ba_transformer.py", "--image", "{image}", "--output", "{lesion_mask}",
         "--source", "{repo_root}/models/ba-transformer/source", "--checkpoint",
-        "{repo_root}/models/ba-transformer/checkpoints/best_isic2016.pkl"
+        "{repo_root}/models/ba-transformer/checkpoints/best_isic2016.pkl", "--device", "{device}"
       ]
     },
     {
@@ -80,7 +80,7 @@
       "adapter_command": [
         "{conda}", "run", "--no-capture-output", "-n", "thesis-avit", "python",
         "{repo_root}/scripts/adapters/unet_resnet34.py", "--image", "{image}", "--output", "{lesion_mask}",
-        "--checkpoint", "{repo_root}/models/unet-resnet34/checkpoints/best_unet_resnet34.pth"
+        "--checkpoint", "{repo_root}/models/unet-resnet34/checkpoints/best_unet_resnet34.pth", "--device", "{device}"
       ]
     },
     {
@@ -101,7 +101,7 @@
         "{conda}", "run", "--no-capture-output", "-n", "thesis-avit", "python",
         "{repo_root}/scripts/adapters/skinmamba.py", "--image", "{image}", "--output", "{lesion_mask}",
         "--source", "{repo_root}/models/skinmamba/source", "--checkpoint",
-        "{repo_root}/models/skinmamba/checkpoints/isic17.pth", "--dataset", "isic17"
+        "{repo_root}/models/skinmamba/checkpoints/isic17.pth", "--dataset", "isic17", "--device", "{device}"
       ]
     },
     {
@@ -122,7 +122,7 @@
         "{conda}", "run", "--no-capture-output", "-n", "thesis-avit", "python",
         "{repo_root}/scripts/adapters/skinmamba.py", "--image", "{image}", "--output", "{lesion_mask}",
         "--source", "{repo_root}/models/skinmamba/source", "--checkpoint",
-        "{repo_root}/models/skinmamba/checkpoints/isic18.pth", "--dataset", "isic18"
+        "{repo_root}/models/skinmamba/checkpoints/isic18.pth", "--dataset", "isic18", "--device", "{device}"
       ]
     },
     {
@@ -142,7 +142,7 @@
       "adapter_command": [
         "{conda}", "run", "--no-capture-output", "-n", "thesis-avit", "python",
         "{repo_root}/scripts/adapters/unixio_isic2018.py", "--image", "{image}", "--output", "{lesion_mask}",
-        "--checkpoint", "{repo_root}/models/unixio-isic2018/checkpoints/best_unet.pt", "--variant", "unet"
+        "--checkpoint", "{repo_root}/models/unixio-isic2018/checkpoints/best_unet.pt", "--variant", "unet", "--device", "{device}"
       ]
     },
     {
@@ -162,7 +162,7 @@
       "adapter_command": [
         "{conda}", "run", "--no-capture-output", "-n", "thesis-avit", "python",
         "{repo_root}/scripts/adapters/unixio_isic2018.py", "--image", "{image}", "--output", "{lesion_mask}",
-        "--checkpoint", "{repo_root}/models/unixio-isic2018/checkpoints/best_unetpp.pt", "--variant", "unetpp"
+        "--checkpoint", "{repo_root}/models/unixio-isic2018/checkpoints/best_unetpp.pt", "--variant", "unetpp", "--device", "{device}"
       ]
     },
     {
@@ -182,7 +182,7 @@
       "adapter_command": [
         "{conda}", "run", "--no-capture-output", "-n", "thesis-avit", "python",
         "{repo_root}/scripts/adapters/theodore_isic2018.py", "--image", "{image}", "--output", "{lesion_mask}",
-        "--checkpoint", "{repo_root}/models/theodore-isic2018/checkpoints/segformer.pt", "--variant", "segformer"
+        "--checkpoint", "{repo_root}/models/theodore-isic2018/checkpoints/segformer.pt", "--variant", "segformer", "--device", "{device}"
       ]
     },
     {
@@ -203,7 +203,7 @@
         "{conda}", "run", "--no-capture-output", "-n", "thesis-avit", "python",
         "{repo_root}/scripts/adapters/vmunet.py", "--image", "{image}", "--output", "{lesion_mask}",
         "--source", "{repo_root}/models/vmunet/source", "--checkpoint",
-        "{repo_root}/models/vmunet/checkpoints/best-vmunet-isic18.pth", "--dataset", "isic18"
+        "{repo_root}/models/vmunet/checkpoints/best-vmunet-isic18.pth", "--dataset", "isic18", "--device", "{device}"
       ]
     },
     {
@@ -223,7 +223,7 @@
       "adapter_command": [
         "{conda}", "run", "--no-capture-output", "-n", "thesis-avit", "python",
         "{repo_root}/scripts/adapters/unixio_isic2018.py", "--image", "{image}", "--output", "{lesion_mask}",
-        "--checkpoint", "{repo_root}/models/unixio-isic2018/checkpoints/best_attention_unet.pt", "--variant", "attention_unet"
+        "--checkpoint", "{repo_root}/models/unixio-isic2018/checkpoints/best_attention_unet.pt", "--variant", "attention_unet", "--device", "{device}"
       ]
     },
     {
@@ -243,7 +243,7 @@
       "adapter_command": [
         "{conda}", "run", "--no-capture-output", "-n", "thesis-avit", "python",
         "{repo_root}/scripts/adapters/theodore_isic2018.py", "--image", "{image}", "--output", "{lesion_mask}",
-        "--checkpoint", "{repo_root}/models/theodore-isic2018/checkpoints/unet.pt", "--variant", "unet"
+        "--checkpoint", "{repo_root}/models/theodore-isic2018/checkpoints/unet.pt", "--variant", "unet", "--device", "{device}"
       ]
     },
     {
@@ -263,7 +263,7 @@
       "adapter_command": [
         "{conda}", "run", "--no-capture-output", "-n", "thesis-avit", "python",
         "{repo_root}/scripts/adapters/theodore_isic2018.py", "--image", "{image}", "--output", "{lesion_mask}",
-        "--checkpoint", "{repo_root}/models/theodore-isic2018/checkpoints/inception.pt", "--variant", "inception"
+        "--checkpoint", "{repo_root}/models/theodore-isic2018/checkpoints/inception.pt", "--variant", "inception", "--device", "{device}"
       ]
     },
     {
@@ -284,7 +284,7 @@
         "{conda}", "run", "--no-capture-output", "-n", "thesis-avit", "python",
         "{repo_root}/scripts/adapters/vmunet.py", "--image", "{image}", "--output", "{lesion_mask}",
         "--source", "{repo_root}/models/vmunet/source", "--checkpoint",
-        "{repo_root}/models/vmunet/checkpoints/best-vmunet-isic17.pth", "--dataset", "isic17"
+        "{repo_root}/models/vmunet/checkpoints/best-vmunet-isic17.pth", "--dataset", "isic17", "--device", "{device}"
       ]
     },
     {
@@ -305,7 +305,7 @@
         "{conda}", "run", "--no-capture-output", "-n", "thesis-avit", "python",
         "{repo_root}/scripts/adapters/delightsam.py", "--image", "{image}", "--output", "{lesion_mask}",
         "--source", "{repo_root}/models/delightsam/source", "--checkpoint",
-        "{repo_root}/models/delightsam/checkpoints/ESP_isic_best.pth"
+        "{repo_root}/models/delightsam/checkpoints/ESP_isic_best.pth", "--device", "{device}"
       ]
     }
   ]

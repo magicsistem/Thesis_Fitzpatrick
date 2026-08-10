@@ -4,8 +4,8 @@
 #SBATCH --partition=gpu
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=32
-#SBATCH --mem=60G
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=48G
 #SBATCH --gres=gpu:a100-sxm4-40gb:1
 #SBATCH --time=24:00:00
 #SBATCH --array=0-4%2
@@ -37,21 +37,15 @@ for path in "$PROJECT_ROOT" "$DATA_ROOT" "$SIF_PATH" "$TRAIN_MANIFEST" "$FOLDS_F
 done
 [[ ! -e "$FOLD_DIR/frozen.json" ]] || { echo "Fold $FOLD is already frozen; refusing to retrain" >&2; exit 2; }
 
-runtime=""
-for candidate in apptainer singularity; do command -v "$candidate" >/dev/null 2>&1 && { runtime=$candidate; break; }; done
-[[ -n "$runtime" ]] || { echo "Neither apptainer nor singularity is available" >&2; exit 2; }
-
 mkdir -p "$FOLD_DIR/training" "$YOLO_ROOT/logs"
 log=$YOLO_ROOT/logs/yolo-${SLURM_ARRAY_JOB_ID:-manual}-$FOLD.log
 exec > >(tee -a "$log") 2>&1
 echo "job=${SLURM_JOB_ID:-unset} array_job=${SLURM_ARRAY_JOB_ID:-unset} task=$FOLD fold=$FOLD"
-echo "host=$(hostname) utc=$(date -u +%FT%TZ) runtime=$runtime git_head=$(git -C "$PROJECT_ROOT" rev-parse HEAD)"
+echo "host=$(hostname) utc=$(date -u +%FT%TZ) git_head=$(git -C "$PROJECT_ROOT" rev-parse HEAD)"
 echo "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-unset}"
 command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi || true
 
-binds="$PROJECT_ROOT:$PROJECT_ROOT,$DATA_ROOT:$DATA_ROOT,$YOLO_ROOT:$YOLO_ROOT"
-container=("$runtime" exec --nv --bind "$binds" --pwd "$PROJECT_ROOT" "$SIF_PATH")
-"${container[@]}" "$PYTHON_BIN" - "$TRAIN_MANIFEST" "$FOLDS_FILE" "$FOLD" <<'PY'
+python3 - "$TRAIN_MANIFEST" "$FOLDS_FILE" "$FOLD" <<'PY'
 import json, sys
 manifest, folds_path, fold = sys.argv[1], sys.argv[2], int(sys.argv[3])
 with open(manifest, encoding="utf-8") as stream: payload = json.load(stream)
@@ -79,7 +73,8 @@ stop_child() {
     exit 143
 }
 trap stop_child TERM INT
-"${container[@]}" "$PYTHON_BIN" scripts/benchmark/yolov3.py train \
+export DATA_ROOT SIF_PATH
+"$PROJECT_ROOT/scripts/hpc/run_in_container.sh" -- "$PYTHON_BIN" scripts/benchmark/yolov3.py train \
     --darknet "$DARKNET_BIN" --data "$FOLD_DIR/lesion.data" \
     --cfg "$FOLD_DIR/lesion-yolov3.cfg" --initial-weights "$INITIAL_WEIGHTS" \
     --output "$FOLD_DIR/training" "${resume_args[@]}" --confirm-training &

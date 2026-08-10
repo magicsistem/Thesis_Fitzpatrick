@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 from datetime import datetime, timezone
 import json
+import os
 from pathlib import Path
 import shlex
 import subprocess
@@ -25,6 +26,7 @@ def main() -> None:
     parser.add_argument("--epochs", type=int, default=100); parser.add_argument("--seed", type=int, default=20260806); parser.add_argument("--device", choices=("cpu", "cuda"), default="cpu")
     parser.add_argument("--resume", action="store_true"); parser.add_argument("--dry-run", action="store_true"); parser.add_argument("--confirm-training", action="store_true")
     parser.add_argument("--command-file", type=Path, help="With --dry-run, write one safely quoted command per line for SLURM")
+    parser.add_argument("--python", dest="python_bin", help="Python executable for a persistent container environment")
     args = parser.parse_args()
     fold_payload = load_json(args.folds)
     fold_ids = [item["fold"] for item in fold_payload["folds"]] if args.fold == "all" else [int(args.fold)]
@@ -35,7 +37,9 @@ def main() -> None:
     commands = []
     for method in methods:
         for fold in fold_ids:
-            command = ["conda", "run", "--no-capture-output", "-n", "thesis-avit", "python", str(REPO_ROOT / "scripts/benchmark/train_backend.py"), "--method", method["method_id"], "--manifest", str(args.manifest), "--data-root", str(args.data_root), "--folds", str(args.folds), "--fold", str(fold), "--p0-root", str(args.p0_root), "--output", str(args.output / method["method_id"] / f"fold-{fold}"), "--epochs", str(args.epochs), "--seed", str(args.seed), "--device", args.device, "--confirm-training"]
+            python_bin = args.python_bin or os.environ.get("THESIS_ADAPTER_PYTHON")
+            prefix = [python_bin] if python_bin else ["conda", "run", "--no-capture-output", "-n", "thesis-avit", "python"]
+            command = [*prefix, str(REPO_ROOT / "scripts/benchmark/train_backend.py"), "--method", method["method_id"], "--manifest", str(args.manifest), "--data-root", str(args.data_root), "--folds", str(args.folds), "--fold", str(fold), "--p0-root", str(args.p0_root), "--output", str(args.output / method["method_id"] / f"fold-{fold}"), "--epochs", str(args.epochs), "--seed", str(args.seed), "--device", args.device, "--confirm-training"]
             if args.resume: command.append("--resume")
             commands.append(command)
     if args.dry_run:

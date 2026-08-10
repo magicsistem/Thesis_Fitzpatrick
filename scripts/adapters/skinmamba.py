@@ -12,10 +12,12 @@ import hashlib
 from pathlib import Path
 import sys
 import types
+import time
 
 import numpy as np
 from PIL import Image, ImageOps
 from _checkpoint import verify_checkpoint
+from _runtime import timed_forward, write_metrics
 
 
 CHECKPOINT_SHA256 = {
@@ -149,7 +151,7 @@ def normalize_state_dict(stored: dict) -> dict:
     }
 
 
-def load_model(source: Path, checkpoint: Path, dataset: str):
+def load_model(source: Path, checkpoint: Path, dataset: str, device: str = "cpu"):
     model_file = source / "models" / "SkinMamba.py"
     if not model_file.is_file():
         raise FileNotFoundError(
@@ -178,20 +180,22 @@ def load_model(source: Path, checkpoint: Path, dataset: str):
         stored = torch.load(checkpoint, map_location="cpu")
     state_dict = normalize_state_dict(stored)
     model.load_state_dict(state_dict, strict=True)
-    model.eval()
+    model.to(device).eval()
     return torch, model
 
 
-def infer(image_path: Path, output_path: Path, source: Path, checkpoint: Path, dataset: str) -> None:
-    torch, model = load_model(source, checkpoint, dataset)
+def infer(image_path: Path, output_path: Path, source: Path, checkpoint: Path, dataset: str, device: str = "cpu") -> None:
+    load_started = time.perf_counter(); torch, model = load_model(source, checkpoint, dataset, device)
+    load_time_ms = (time.perf_counter() - load_started) * 1000
     with Image.open(image_path) as opened:
         image = ImageOps.exif_transpose(opened).convert("RGB")
     original_size = image.size
     values = preprocess(image, dataset)
-    tensor = torch.from_numpy(values).permute(2, 0, 1).unsqueeze(0).float()
-    with torch.inference_mode():
-        probability = model(tensor)[0, 0]
-        mask = (probability >= 0.5).to(torch.uint8).cpu().numpy() * 255
+    tensor = torch.from_numpy(values).permute(2, 0, 1).unsqueeze(0).to(device=device, dtype=torch.float32)
+    output, inference_time_ms, warmup = timed_forward(torch, device, lambda: model(tensor))
+    probability = output[0, 0]
+    mask = (probability >= 0.5).to(torch.uint8).cpu().numpy() * 255
+    write_metrics(torch, device, load_time_ms=load_time_ms, inference_time_ms=inference_time_ms, warmup=warmup)
     result = Image.fromarray(mask, mode="L").resize(original_size, resample=Image.Resampling.NEAREST)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     result.save(output_path)
@@ -204,6 +208,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--source", required=True, type=Path)
     parser.add_argument("--checkpoint", required=True, type=Path)
     parser.add_argument("--dataset", required=True, choices=sorted(CHECKPOINT_SHA256))
+    parser.add_argument("--device", choices=("cpu", "cuda"), default="cpu")
     return parser.parse_args()
 
 
@@ -215,6 +220,7 @@ def main() -> None:
         args.source.resolve(),
         args.checkpoint.resolve(),
         args.dataset,
+        args.device,
     )
 
 

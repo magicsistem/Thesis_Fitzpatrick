@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
-import shutil
 import subprocess
 import sys
 
@@ -40,11 +39,8 @@ def install_source() -> None:
         if not (SOURCE_DIR / ".git").is_dir():
             raise SystemExit(f"{SOURCE_DIR} existe, pero no es un clon Git.")
     else:
-        gh = shutil.which("gh")
-        if not gh:
-            raise SystemExit("No se encontró gh. Instala y autentica GitHub CLI primero.")
         SOURCE_DIR.parent.mkdir(parents=True, exist_ok=True)
-        run([gh, "repo", "clone", SOURCE_REPOSITORY, str(SOURCE_DIR), "--", "--depth", "1"])
+        run(["git", "clone", "--no-checkout", f"https://github.com/{SOURCE_REPOSITORY}.git", str(SOURCE_DIR)])
 
     current = subprocess.run(
         ["git", "rev-parse", "HEAD"], cwd=SOURCE_DIR, check=True, text=True, capture_output=True
@@ -65,6 +61,7 @@ def install_checkpoint() -> None:
         "-m",
         "gdown",
         "--folder",
+        "--continue",
         WEIGHTS_FOLDER,
         "-O",
         str(CHECKPOINT_DIR),

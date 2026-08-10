@@ -7,10 +7,12 @@ import hashlib
 import os
 from pathlib import Path
 import sys
+import time
 
 import numpy as np
 from PIL import Image, ImageOps
 from _checkpoint import verify_checkpoint
+from _runtime import timed_forward, write_metrics
 
 
 CHECKPOINT_SHA256 = "9b4ad401483d96535769433f4781da42179bec6a7ef932a1d02a7f786e9f24db"
@@ -89,7 +91,8 @@ def load_model(source: Path, checkpoint: Path, device: str):
 def infer(image_path: Path, output_path: Path, source: Path, checkpoint: Path, device: str) -> None:
     if device == "cuda":
         os.environ.setdefault("CUDA_VISIBLE_DEVICES", "0")
-    torch, model = load_model(source, checkpoint, device)
+    load_started = time.perf_counter(); torch, model = load_model(source, checkpoint, device)
+    load_time_ms = (time.perf_counter() - load_started) * 1000
     with Image.open(image_path) as opened:
         image = ImageOps.exif_transpose(opened).convert("RGB")
     original_size = image.size
@@ -97,9 +100,9 @@ def infer(image_path: Path, output_path: Path, source: Path, checkpoint: Path, d
     tensor = torch.from_numpy(values).permute(2, 0, 1).unsqueeze(0).to(
         device=device, dtype=torch.float32
     )
-    with torch.inference_mode():
-        logits = model(tensor, d="0")["seg"]
-        mask = (torch.sigmoid(logits)[0, 0] >= 0.5).to(torch.uint8).cpu().numpy() * 255
+    logits, inference_time_ms, warmup = timed_forward(torch, device, lambda: model(tensor, d="0")["seg"])
+    mask = (torch.sigmoid(logits)[0, 0] >= 0.5).to(torch.uint8).cpu().numpy() * 255
+    write_metrics(torch, device, load_time_ms=load_time_ms, inference_time_ms=inference_time_ms, warmup=warmup)
     result = Image.fromarray(mask, mode="L").resize(original_size, resample=Image.Resampling.NEAREST)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     result.save(output_path)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import hashlib
+import os
 from pathlib import Path
 import time
 from typing import Any, Protocol
@@ -135,6 +136,13 @@ class OpenCVYoloV3Detector:
         self.nms_threshold = nms_threshold
         self.margin_fraction = margin_fraction
         self.network = cv2.dnn.readNetFromDarknet(str(cfg_path), str(weights_path))
+        self.execution_device = "cpu"
+        if os.environ.get("THESIS_OPENCV_DNN_DEVICE") == "cuda":
+            if not hasattr(cv2, "cuda") or cv2.cuda.getCudaEnabledDeviceCount() < 1:
+                raise RuntimeError("OpenCV DNN CUDA was requested but this OpenCV build has no visible CUDA device")
+            self.network.setPreferableBackend(cv2.dnn.DNN_BACKEND_CUDA)
+            self.network.setPreferableTarget(cv2.dnn.DNN_TARGET_CUDA)
+            self.execution_device = "cuda"
 
     @property
     def identity(self) -> dict[str, Any]:
@@ -146,6 +154,7 @@ class OpenCVYoloV3Detector:
             "confidence_threshold": self.confidence_threshold,
             "nms_threshold": self.nms_threshold,
             "margin_fraction": self.margin_fraction,
+            "execution_device": self.execution_device,
         }
 
     def detect(self, rgb: np.ndarray) -> list[Detection]:

@@ -114,16 +114,17 @@ section "GPU visibility"
 printf 'SLURM_JOB_ID=%s\nCUDA_VISIBLE_DEVICES=%s\n' "${SLURM_JOB_ID:-not-set}" "${CUDA_VISIBLE_DEVICES:-not-set}"
 if $gpu_session; then optional nvidia-smi; else echo "No allocated GPU is visible; GPU compatibility is not evaluated in this terminal."; fi
 
-container_python=$(
-    "$runtime" exec "${nv_args[@]}" "$sif" sh -c 'command -v python3 || command -v python' 2>/dev/null | head -n 1
-)
-section "Container Python and packages"
-if [[ -z "$container_python" ]]; then
+section "Container Python, packages and compilers (one exec)"
+"$runtime" exec "${nv_args[@]}" "$sif" sh <<'CONTAINER' 2>&1 || true
+set -u
+container_python=$(command -v python3 || command -v python || true)
+if [ -z "$container_python" ]; then
     echo "No python/python3 executable found inside the image."
-else
-    optional "$runtime" exec "${nv_args[@]}" "$sif" "$container_python" --version
-    optional "$runtime" exec "${nv_args[@]}" "$sif" "$container_python" -m pip --version
-    "$runtime" exec "${nv_args[@]}" "$sif" "$container_python" - <<'PY' 2>&1 || true
+    exit 0
+fi
+"$container_python" --version || true
+"$container_python" -m pip --version || true
+"$container_python" - <<'PY' || true
 import importlib
 import platform
 
@@ -164,14 +165,16 @@ try:
 except Exception as exc:
     print(f"PyTorch: unavailable ({type(exc).__name__}: {exc})")
 PY
-fi
-
-section "Container compilers"
 for tool in gcc g++ make nvcc; do
     printf '%s:\n' "$tool"
-    "$runtime" exec "${nv_args[@]}" "$sif" sh -c \
-        "if command -v '$tool' >/dev/null 2>&1; then command -v '$tool'; '$tool' --version 2>&1 | head -n 3; else echo unavailable; fi" 2>&1 || true
+    if command -v "$tool" >/dev/null 2>&1; then
+        command -v "$tool"
+        "$tool" --version 2>&1 | head -n 3 || true
+    else
+        echo unavailable
+    fi
 done
+CONTAINER
 
 section "Conclusion"
-echo "This report inventories the current portal environment only. It does not certify benchmark compatibility."
+echo "This report inventories the current portal environment only. Container checks used one exec to avoid repeated SIF conversion."

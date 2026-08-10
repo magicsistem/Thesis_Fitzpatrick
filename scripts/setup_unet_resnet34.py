@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
-import urllib.request
+import sys
 
 from _project_paths import REPO_ROOT
+sys.path.insert(0, str(REPO_ROOT / "src"))
+from thesis_fitzpatrick.datasets import download_resumable  # noqa: E402
 
 
 MODEL_REVISION = "03d64aeb97ef50ae1b3a68224645c7eeb081a61a"
@@ -32,23 +34,8 @@ def download_checkpoint() -> None:
         print("Checkpoint U-Net/ResNet34 ya descargado y verificado.")
         return
     CHECKPOINT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    temporary = CHECKPOINT_PATH.with_suffix(".download")
-    temporary.unlink(missing_ok=True)
     print(f"Descargando checkpoint fijado en {MODEL_REVISION}...", flush=True)
-    try:
-        with urllib.request.urlopen(CHECKPOINT_URL) as response, temporary.open("wb") as output:
-            while chunk := response.read(1024 * 1024):
-                output.write(chunk)
-    except Exception:
-        temporary.unlink(missing_ok=True)
-        raise
-    actual_sha = sha256(temporary)
-    if actual_sha != CHECKPOINT_SHA256:
-        temporary.unlink(missing_ok=True)
-        raise SystemExit(
-            f"Checkpoint inválido: esperado {CHECKPOINT_SHA256}, obtenido {actual_sha}."
-        )
-    temporary.replace(CHECKPOINT_PATH)
+    download_resumable(CHECKPOINT_URL, CHECKPOINT_PATH, CHECKPOINT_SHA256)
     print(f"Checkpoint ISIC 2018 verificado: {CHECKPOINT_SHA256}")
 
 

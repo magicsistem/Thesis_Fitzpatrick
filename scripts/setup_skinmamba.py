@@ -44,11 +44,8 @@ def install_source() -> None:
         if not (SOURCE_DIR / ".git").is_dir():
             raise SystemExit(f"{SOURCE_DIR} existe, pero no es un clon Git.")
     else:
-        gh = shutil.which("gh")
-        if not gh:
-            raise SystemExit("No se encontró GitHub CLI (gh).")
         SOURCE_DIR.parent.mkdir(parents=True, exist_ok=True)
-        run([gh, "repo", "clone", SOURCE_REPOSITORY, str(SOURCE_DIR), "--", "--depth", "1"])
+        run(["git", "clone", "--no-checkout", f"https://github.com/{SOURCE_REPOSITORY}.git", str(SOURCE_DIR)])
     current = subprocess.run(
         ["git", "rev-parse", "HEAD"], cwd=SOURCE_DIR, check=True, text=True, capture_output=True
     ).stdout.strip()
@@ -67,7 +64,7 @@ def install_checkpoints() -> None:
         print("Checkpoints SkinMamba ya descargados y verificados.")
         return
     CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
-    run([sys.executable, "-m", "gdown", WEIGHTS_URL, "-O", str(ARCHIVE_PATH)])
+    run([sys.executable, "-m", "gdown", "--continue", WEIGHTS_URL, "-O", str(ARCHIVE_PATH)])
     actual_archive = sha256(ARCHIVE_PATH)
     if actual_archive != ARCHIVE_SHA256:
         raise SystemExit(

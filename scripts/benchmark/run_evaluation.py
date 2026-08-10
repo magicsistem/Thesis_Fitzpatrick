@@ -257,16 +257,10 @@ def _neural_backend(method: dict[str, Any], input_path: Path, output_path: Path,
         atomic_write_png(output_path, final * 255)
         return BackendResult(native_mask=final, input_size=members[0].input_size, backend_time_ms=sum(member.backend_time_ms for member in members), model_identity={"method_id": method["method_id"], "backend": method["backend_id"], "protocol": "B2", "ensemble_members": len(members)}, details={"ensemble": "majority vote of five grouped-fold B2 checkpoints", "members": [member.manifest() for member in members]})
     if warmup < 0 or repetitions < 1: raise ValueError("warmup/repetitions inválidos")
-    warmup_path = output_path.with_name(".warmup.png")
-    for _ in range(warmup):
-        success, message, _ = review.run_adapter(method, input_path, warmup_path)
-        warmup_path.unlink(missing_ok=True)
-        if not success:
-            return BackendResult(native_mask=np.zeros((1, 1), np.uint8), input_size=(1, 1), backend_time_ms=0, model_identity={"method_id": method["method_id"], "backend": method["backend_id"]}, warnings=[f"warm-up: {message}"], failure_code="adapter_error")
     samples = []
     runtime = None
     for _ in range(repetitions):
-        success, message, runtime = review.run_adapter(method, input_path, output_path)
+        success, message, runtime = review.run_adapter(method, input_path, output_path, internal_warmup=warmup)
         if not success: break
         samples.append(runtime)
     elapsed_samples = [float(item["wall_seconds"] * 1000) for item in samples]
@@ -292,10 +286,12 @@ def _neural_backend(method: dict[str, Any], input_path: Path, output_path: Path,
             "backend_time_p75_ms": float(np.percentile(elapsed_samples, 75)),
             "backend_time_p95_ms": float(np.percentile(elapsed_samples, 95)),
             "peak_ram_mb": max(item["peak_ram_mb"] for item in samples),
-            "vram_peak_mb": None,
-            "vram_status": "not_available_cpu_adapter",
+            "vram_peak_mb": max((item.get("adapter", {}).get("peak_vram_mb") or 0) for item in samples) or None,
+            "vram_status": "measured_by_adapter" if any(item.get("adapter", {}).get("peak_vram_mb") is not None for item in samples) else "not_available_cpu_or_legacy_adapter",
             "cpu_measurement": "child process CPU time and sampled process-tree RSS",
-            "timing_scope": "adapter subprocess including process startup and model loading; end_to_end is reported separately",
+            "model_load_time_samples_ms": [item.get("adapter", {}).get("model_load_time_ms") for item in samples],
+            "inference_time_samples_ms": [item.get("adapter", {}).get("inference_time_ms") for item in samples],
+            "timing_scope": "backend_time is adapter subprocess wall time including startup/load; adapter sidecar separately records synchronized model load and forward; end_to_end is reported separately",
         },
     )
 

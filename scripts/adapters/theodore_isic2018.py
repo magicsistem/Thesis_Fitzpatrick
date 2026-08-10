@@ -6,10 +6,12 @@ import argparse
 import hashlib
 from pathlib import Path
 import re
+import time
 
 import numpy as np
 from PIL import Image, ImageOps
 from _checkpoint import verify_checkpoint
+from _runtime import timed_forward, write_metrics
 
 
 IMAGE_SIZE = 128
@@ -191,7 +193,7 @@ def build_model(variant: str, torch):
     raise ValueError(f"Variante Theodore desconocida: {variant}")
 
 
-def load_model(checkpoint: Path, variant: str):
+def load_model(checkpoint: Path, variant: str, device: str = "cpu"):
     if not checkpoint.is_file():
         raise FileNotFoundError(
             f"No se encontró {checkpoint}. Ejecuta scripts/setup_theodore_isic2018.py."
@@ -209,20 +211,21 @@ def load_model(checkpoint: Path, variant: str):
     if variant == "segformer":
         state = normalize_segformer_state_dict(state, model.state_dict())
     model.load_state_dict(state, strict=True)
-    model.eval()
+    model.to(device).eval()
     return torch, model
 
 
-def infer(image_path: Path, output_path: Path, checkpoint: Path, variant: str) -> None:
-    torch, model = load_model(checkpoint, variant)
+def infer(image_path: Path, output_path: Path, checkpoint: Path, variant: str, device: str = "cpu") -> None:
+    load_started = time.perf_counter(); torch, model = load_model(checkpoint, variant, device)
+    load_time_ms = (time.perf_counter() - load_started) * 1000
     with Image.open(image_path) as opened:
         image = ImageOps.exif_transpose(opened).convert("RGB")
     original_size = image.size
     values = preprocess(image, imagenet_normalized=variant == "segformer")
-    tensor = torch.from_numpy(values).permute(2, 0, 1).unsqueeze(0).float()
-    with torch.inference_mode():
-        logits = model(tensor)
-        mask = torch.argmax(logits[0], dim=0).to(torch.uint8).cpu().numpy() * 255
+    tensor = torch.from_numpy(values).permute(2, 0, 1).unsqueeze(0).to(device=device, dtype=torch.float32)
+    logits, inference_time_ms, warmup = timed_forward(torch, device, lambda: model(tensor))
+    mask = torch.argmax(logits[0], dim=0).to(torch.uint8).cpu().numpy() * 255
+    write_metrics(torch, device, load_time_ms=load_time_ms, inference_time_ms=inference_time_ms, warmup=warmup)
     result = Image.fromarray(mask, mode="L").resize(original_size, Image.Resampling.NEAREST)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     result.save(output_path)
@@ -234,12 +237,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--checkpoint", required=True, type=Path)
     parser.add_argument("--variant", required=True, choices=sorted(CHECKPOINTS))
+    parser.add_argument("--device", choices=("cpu", "cuda"), default="cpu")
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    infer(args.image.resolve(), args.output.resolve(), args.checkpoint.resolve(), args.variant)
+    infer(args.image.resolve(), args.output.resolve(), args.checkpoint.resolve(), args.variant, args.device)
 
 
 if __name__ == "__main__":

@@ -22,6 +22,14 @@ def cpu_build_command(jobs: int = 4) -> list[str]:
     return ["make", "GPU=0", "CUDNN=0", "OPENCV=0", f"-j{jobs}"]
 
 
+def gpu_build_command(jobs: int = 8) -> list[str]:
+    """Build the pinned Darknet for the A100 architecture without system OpenCV."""
+    return [
+        "make", "GPU=1", "CUDNN=1", "CUDNN_HALF=0", "OPENCV=0",
+        "ARCH=-gencode arch=compute_80,code=[sm_80,compute_80]", f"-j{jobs}",
+    ]
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--revision", default=OFFICIAL_DARKNET_REVISION, help="Exact official pjreddie/darknet commit")
@@ -29,10 +37,15 @@ def main() -> None:
     parser.add_argument("--weights", type=Path, default=REPO_ROOT / "models/yolov3-darknet/checkpoints/darknet53.conv.74")
     parser.add_argument("--expected-weights-sha256", help="Required to publish weights as verified")
     parser.add_argument("--download-bootstrap", action="store_true"); parser.add_argument("--confirm-download", action="store_true")
-    parser.add_argument("--build", action="store_true", help="Compile the pinned source using its Makefile (CPU defaults unless edited explicitly)")
+    parser.add_argument("--build", action="store_true", help="Compile the pinned source using its Makefile")
+    parser.add_argument("--gpu", action="store_true", help="Build for one NVIDIA A100 (compute capability 8.0); requires the CUDA/cuDNN toolchain")
+    parser.add_argument("--jobs", type=int, default=8)
     parser.add_argument("--dry-run", action="store_true", help="Show exact network/build actions without changing files")
     args = parser.parse_args()
-    plan = {"revision": args.revision, "source": str(args.source), "source_present": args.source.exists(), "clone_if_missing": True, "download_bootstrap": args.download_bootstrap, "weights": str(args.weights), "build": args.build, "network_confirmation_required": True}
+    if args.jobs < 1:
+        raise SystemExit("--jobs must be positive")
+    build_command = gpu_build_command(args.jobs) if args.gpu else cpu_build_command(args.jobs)
+    plan = {"revision": args.revision, "source": str(args.source), "source_present": args.source.exists(), "clone_if_missing": True, "download_bootstrap": args.download_bootstrap, "weights": str(args.weights), "build": args.build, "build_command": build_command, "network_confirmation_required": True}
     if args.dry_run:
         print(json.dumps(plan, indent=2)); return
     if not args.source.exists():
@@ -52,10 +65,9 @@ def main() -> None:
     if args.download_bootstrap:
         if not args.confirm_download: raise SystemExit("Revise tamaño/espacio y repita con --confirm-download")
         download_resumable("https://data.pjreddie.com/files/darknet53.conv.74", args.weights, args.expected_weights_sha256)
-    build_command = cpu_build_command()
     if args.build: subprocess.run(build_command, cwd=args.source, check=True)
     binary = args.source / "darknet"
-    payload = {"source": "https://github.com/pjreddie/darknet", "revision": resolved, "weights_url": "https://data.pjreddie.com/files/darknet53.conv.74", "weights_path": str(args.weights), "weights_sha256": sha256_file(args.weights) if args.weights.is_file() else None, "weights_verified_against_expected": bool(args.expected_weights_sha256), "build_command": build_command, "build_mode": "CPU_no_CUDA_no_system_OpenCV", "binary_path": str(binary), "binary_sha256": sha256_file(binary) if binary.is_file() else None}
+    payload = {"source": "https://github.com/pjreddie/darknet", "revision": resolved, "weights_url": "https://data.pjreddie.com/files/darknet53.conv.74", "weights_path": str(args.weights), "weights_sha256": sha256_file(args.weights) if args.weights.is_file() else None, "weights_verified_against_expected": bool(args.expected_weights_sha256), "build_command": build_command, "build_mode": "A100_CUDA_CUDNN_no_OpenCV" if args.gpu else "CPU_no_CUDA_no_system_OpenCV", "binary_path": str(binary), "binary_sha256": sha256_file(binary) if binary.is_file() else None}
     atomic_write_json(REPO_ROOT / "models/yolov3-darknet/setup_manifest.json", payload)
     print(json.dumps(payload, indent=2))
 

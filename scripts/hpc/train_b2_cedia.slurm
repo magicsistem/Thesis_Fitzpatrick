@@ -4,8 +4,8 @@
 #SBATCH --partition=gpu
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=32
-#SBATCH --mem=60G
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=48G
 #SBATCH --gres=gpu:a100-sxm4-40gb:1
 #SBATCH --time=24:00:00
 #SBATCH --array=0-74%2
@@ -39,12 +39,9 @@ OUTPUT=$B2_ROOT/$METHOD_ID/fold-$FOLD
 for path in "$PROJECT_ROOT" "$DATA_ROOT" "$SIF_PATH" "$TRAIN_MANIFEST" "$FOLDS_FILE" "$P0_ROOT" "$YOLO_FROZEN_ROOT"; do
     [[ -e "$path" ]] || { echo "Missing prerequisite: $path" >&2; exit 2; }
 done
+[[ -f "$P0_ROOT/oof_manifest.json" ]] || { echo "B2 requires completed leakage-safe OOF P0: $P0_ROOT/oof_manifest.json" >&2; exit 2; }
 
-runtime=""
-for candidate in apptainer singularity; do command -v "$candidate" >/dev/null 2>&1 && { runtime=$candidate; break; }; done
-[[ -n "$runtime" ]] || { echo "Neither apptainer nor singularity is available" >&2; exit 2; }
-
-python_bin=${PYTHON_BIN:-python3}
+python_bin=${PYTHON_BIN:-$PROJECT_ROOT/.cedia/venv/bin/python}
 if [[ -n "${B2_VENV_ROOT:-}" && -x "$B2_VENV_ROOT/$METHOD_ID/bin/python" ]]; then
     python_bin=$B2_VENV_ROOT/$METHOD_ID/bin/python
 elif [[ -n "${VENV_PATH:-}" ]]; then
@@ -56,20 +53,19 @@ mkdir -p "$OUTPUT" "$B2_ROOT/logs"
 log=$B2_ROOT/logs/b2-${SLURM_ARRAY_JOB_ID:-manual}-$TASK-$METHOD_ID-fold$FOLD.log
 exec > >(tee -a "$log") 2>&1
 echo "job=${SLURM_JOB_ID:-unset} array_job=${SLURM_ARRAY_JOB_ID:-unset} task=$TASK method=$METHOD_ID fold=$FOLD"
-echo "host=$(hostname) utc=$(date -u +%FT%TZ) runtime=$runtime python=$python_bin git_head=$(git -C "$PROJECT_ROOT" rev-parse HEAD)"
+echo "host=$(hostname) utc=$(date -u +%FT%TZ) python=$python_bin git_head=$(git -C "$PROJECT_ROOT" rev-parse HEAD)"
 echo "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-unset}"
 command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi || true
 
-binds="$PROJECT_ROOT:$PROJECT_ROOT,$DATA_ROOT:$DATA_ROOT,$P0_ROOT:$P0_ROOT,$B2_ROOT:$B2_ROOT,$YOLO_FROZEN_ROOT:$YOLO_FROZEN_ROOT"
-container=("$runtime" exec --nv --bind "$binds" --pwd "$PROJECT_ROOT" "$SIF_PATH")
-"${container[@]}" "$python_bin" - "$TRAIN_MANIFEST" "$FOLDS_FILE" "$YOLO_FROZEN_ROOT" <<'PY'
+python3 - "$TRAIN_MANIFEST" "$FOLDS_FILE" "$YOLO_FROZEN_ROOT" "$P0_ROOT/oof_manifest.json" <<'PY'
 import hashlib, json, pathlib, sys
 
-manifest_path, folds_path, frozen_root = map(pathlib.Path, sys.argv[1:])
+manifest_path, folds_path, frozen_root, p0_manifest_path = map(pathlib.Path, sys.argv[1:])
 manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 folds = json.loads(folds_path.read_text(encoding="utf-8"))
 if manifest.get("split") != "train": raise SystemExit("B2 requires split=train; sealed test is forbidden")
 if len(folds.get("folds", [])) != 5: raise SystemExit("B2 requires exactly five folds")
+if json.loads(p0_manifest_path.read_text(encoding="utf-8")).get("status") != "completed": raise SystemExit("B2 requires completed leakage-safe OOF P0")
 for fold in folds["folds"]:
     if set(fold["train_ids"]) & set(fold["validation_ids"]): raise SystemExit("Fold leakage detected")
 for index in range(5):
@@ -96,7 +92,8 @@ stop_child() {
     exit 143
 }
 trap stop_child TERM INT
-"${container[@]}" "$python_bin" scripts/benchmark/train_backend.py \
+export DATA_ROOT SIF_PATH VENV_PATH=${VENV_PATH:-$PROJECT_ROOT/.cedia/venv}
+"$PROJECT_ROOT/scripts/hpc/run_in_container.sh" -- "$python_bin" scripts/benchmark/train_backend.py \
     --method "$METHOD_ID" --manifest "$TRAIN_MANIFEST" --data-root "$DATA_ROOT" \
     --folds "$FOLDS_FILE" --fold "$FOLD" --p0-root "$P0_ROOT" --output "$OUTPUT" \
     --epochs "$EPOCHS" --seed "$SEED" --device cuda "${resume[@]}" --confirm-training &

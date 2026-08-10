@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import json
+import os
 from pathlib import Path
 import random
 import re
@@ -169,6 +170,11 @@ def select_validation_configuration(records: list[dict[str, Any]], confidence_ca
 def collect_raw_validation_detections(cfg: Path, weights: Path, manifest: dict[str, Any], data_root: Path, validation_ids: set[str], *, input_size: tuple[int, int] = (512, 512), minimum_confidence: float = 0.01) -> list[dict[str, Any]]:
     if manifest.get("split") != "train": raise ValueError("La inferencia de selección solo acepta el manifest train y IDs del fold de validación")
     network = cv2.dnn.readNetFromDarknet(str(cfg), str(weights)); records = []
+    if os.environ.get("THESIS_OPENCV_DNN_DEVICE") == "cuda":
+        if not hasattr(cv2, "cuda") or cv2.cuda.getCudaEnabledDeviceCount() < 1:
+            raise RuntimeError("OpenCV DNN CUDA was requested but this OpenCV build has no visible CUDA device")
+        network.setPreferableBackend(cv2.dnn.DNN_BACKEND_CUDA)
+        network.setPreferableTarget(cv2.dnn.DNN_TARGET_CUDA)
     for item in manifest["items"]:
         if item["image_id"] not in validation_ids: continue
         if not item.get("mask_paths"): raise ValueError(f"Falta máscara de validación autorizada: {item['image_id']}")

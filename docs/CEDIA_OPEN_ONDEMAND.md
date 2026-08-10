@@ -1,184 +1,75 @@
-# Ejecución en CEDIA mediante Open OnDemand
+# Evidencia CEDIA y decisiones de ejecución
 
-Esta guía prepara la ejecución remota sin asumir acceso por línea de comandos
-desde la laptop. No certifica todavía que `pytorch_24.01-py3.sif` sea compatible:
-esa conclusión depende del diagnóstico ejecutado dentro de CEDIA.
+Este documento conserva la evidencia técnica confirmada el 2026-08-10. La guía
+copiable de principio a fin está en [CEDIA_FROM_ZERO.md](CEDIA_FROM_ZERO.md).
 
-## Evidencia y datos pendientes
+## Entorno observado
 
-Información histórica proporcionada por el usuario, pendiente de confirmar en
-el portal actual:
+- Acceso exclusivamente por <https://hpc.cedia.edu.ec> y Open OnDemand.
+- Apptainer 1.3.0; Slurm 22.05.5.
+- `$HOME/pytorch_24.01-py3.sif`, 10135441408 bytes, SHA-256
+  `b9db68700a47ae0811e8c4758d6effc3221000dac53e5d05ece0a8cafd77e2a3`.
+- NGC PyTorch 24.01: Ubuntu 22.04, Python 3.10.12, torch 2.2.0a0,
+  torchvision 0.17.0a0, CUDA 12.3 y cuDNN 8907.
+- GPU validada en sesión interactiva: A100-SXM4-40GB, driver 535.247.01.
+- Partición de producción `gpu`, máximo observado de dos días; nodos con ocho
+  A100. La sesión interactiva de diagnóstico usó 32 CPU, 96 GiB y una A100.
+- HOME NFS con 33 TB libres en el volumen; no apareció cuota individual.
 
-- portal: <https://hpc.cedia.edu.ec>;
-- HOME observado: `/home/miguel.benavides__yachaytech.edu.ec`;
-- partición `gpu` y GPU NVIDIA A100 SXM4 de 40 GB;
-- imagen denominada `pytorch_24.01-py3.sif`, con Python 3.10.12 observado;
-- reserva anterior: 64 CPU, 120 GB RAM y dos A100 durante 24 horas.
+No se presupone Conda remoto. Los paquetes ausentes observados fueron
+scikit-image, timm, transformers y segmentation-models-pytorch; el código no
+requiere scikit-image para las métricas actuales. El bootstrap instala los otros
+tres y `gdown` en un venv persistente sin reemplazar el stack CUDA.
 
-La ubicación actual de la SIF, el proyecto, los datasets y el almacenamiento de
-resultados no se conocen. Tampoco están confirmados el runtime de contenedores,
-cuotas, módulos, QoS ni paquetes dentro de la imagen. Los entornos locales
-`tesis-sam` y `thesis-avit` no se presuponen en CEDIA.
+## Limitación del runtime
 
-## Diagnóstico de solo lectura
+El host no ofreció `squashfuse`, `fuse2fs` ni `gocryptfs`, por lo que Apptainer
+convierte la SIF a un sandbox temporal en cada `exec`. No se requieren
+privilegios ni una imagen nueva: `run_in_container.sh` agrupa una etapa completa
+en un único `exec`. El bootstrap instala todo en una invocación; cada job Slurm
+usa una invocación para su entrenamiento/evaluación.
 
-Hay dos maneras de ejecutarlo en Open OnDemand:
+## Paralelismo comprobado en código
 
-1. Abra la aplicación que el portal muestre como terminal del clúster (en
-   instalaciones habituales aparece bajo `Clusters → Shell Access`, pero el
-   nombre puede haber cambiado), sitúese en la copia remota del repositorio y
-   ejecute el comando siguiente.
-2. Abra la aplicación interactiva con GPU que ofrezca el portal. Como punto de
-   partida histórico, solicite partición `gpu`, 16 horas, 32 CPU, 96 GB RAM y
-   una A100 de 40 GB. Desde la terminal de esa sesión ejecute el mismo comando;
-   esta modalidad permite comprobar la GPU visible.
+Darknet se ejecuta sin `-gpus`; una tarea usa la única GPU que Slurm expone.
+B2 no implementa DDP ni DataParallel. YOLO usa array 0–4 para folds 0–4; B2 usa
+array 0–74, con `task // 5` para S01–S15 y `task % 5` para folds 0–4. Los
+adaptadores aceptan `--device cuda`; el wrapper sustituye el prefijo Conda del
+catálogo por el Python persistente mediante `THESIS_ADAPTER_PYTHON`.
 
-```bash
-cd "$HOME/Thesis_Fitzpatrick"  # solo si esta es la ubicación que usted eligió
-bash scripts/hpc/inspect_cedia_environment.sh 2>&1 | \
-  tee "cedia_environment_$(date +%Y%m%d_%H%M%S).txt"
-```
+Recursos iniciales por tarea:
 
-Si la búsqueda limitada bajo `$HOME` no encuentra la imagen, repita con la ruta
-que usted observe en el administrador de archivos o terminal del portal:
+| Job | CPU | RAM | GPU | Tiempo | Motivo |
+|---|---:|---:|---:|---:|---|
+| smoke | 4 | 24 GiB | 1 A100 | 1 h | una imagen/AViT |
+| YOLO fold | 16 | 48 GiB | 1 A100 | 24 h | entrenamiento Darknet CUDA |
+| B2 modelo-fold | 8 | 48 GiB | 1 A100 | 24 h | batch efectivo actual 1 |
+| A/B1/C0–C3 | 8 | 48 GiB | 1 A100 | 48 h | 16 backends secuenciales |
 
-```bash
-SIF_PATH="/ruta/observada/en/CEDIA/pytorch_24.01-py3.sif" \
-bash scripts/hpc/inspect_cedia_environment.sh 2>&1 | \
-  tee "cedia_environment_with_sif_$(date +%Y%m%d_%H%M%S).txt"
-```
+La inferencia OpenCV DNN de P0 permanece en CPU porque la compilación CUDA de
+OpenCV no fue confirmada; la GPU del job sigue reservada para los backends
+neuronales. Son estimaciones iniciales, no mediciones de utilización. Ajuste futuras
+reservas con `sacct MaxRSS`, tiempos y VRAM reales sin cambiar parámetros
+científicos silenciosamente.
 
-Puede añadir directorios accesibles y concretos, sin recorrer todo el sistema:
+## Dependencias por familia
 
-```bash
-SIF_SEARCH_ROOTS="/primera/ruta:/segunda/ruta" \
-bash scripts/hpc/inspect_cedia_environment.sh
-```
+| Familia | Dependencias adicionales al SIF | Estado CEDIA |
+|---|---|---|
+| S01, S02, S05–S06, S10, S14, S15 | timm, einops | instalable en `.cedia/venv`; pendiente ejecutar smoke |
+| S03, S11–S13 | stack PyTorch/Pillow de la SIF | pendiente cargar checkpoint en A100 |
+| S04, S07–S08 | segmentation-models-pytorch 0.5.0, timm | fijado en requirements; pendiente preflight CEDIA |
+| S09 | transformers 4.40.2 | fijado; pendiente cargar checkpoint CEDIA |
+| S16/P0/métricas | OpenCV, NumPy, SciPy, Pillow, PyYAML | presentes; validable CPU |
+| Darknet | GCC/G++, make, NVCC 12.3, cuDNN | presentes; compilación A100 pendiente |
 
-Devuelva el archivo `cedia_environment_*.txt` o
-`cedia_environment_with_sif_*.txt`. Si hizo ambos diagnósticos, devuelva ambos.
-No hace falta enviar la SIF.
+Una incompatibilidad real puede justificar venvs por backend, pero no se crea
+otra SIF ni quince entornos especulativos. `B2_VENV_ROOT` se conserva como vía de
+escape documentada en la plantilla.
 
-## Matriz provisional de dependencias
+## Transporte sin SSH
 
-La columna final permanece deliberadamente sin resolver hasta leer el informe
-de CEDIA.
-
-| Métodos/componente | Requisitos observados en código o archivos locales | Estrategia persistente posible | SIF |
-|---|---|---|---|
-| S01 AViT | PyTorch, torchvision, NumPy, Pillow, timm, einops, PyYAML; el repositorio upstream declara además fvcore/monai para otros flujos | venv común si las versiones cargan el checkpoint | pendiente de diagnóstico CEDIA |
-| S02 UltraLight-VM-UNet | PyTorch, NumPy, Pillow, timm, einops; el adaptador sustituye `mamba_ssm` por compatibilidad local | venv común; no compilar Mamba salvo fallo demostrado | pendiente de diagnóstico CEDIA |
-| S03 BA-Transformer | PyTorch, torchvision, NumPy, Pillow; el adaptador evita el peso ResNet absoluto del autor | venv común si el código upstream carga | pendiente de diagnóstico CEDIA |
-| S04 | PyTorch, torchvision y `segmentation-models-pytorch==0.5.0` | venv para SMP si hay conflicto | pendiente de diagnóstico CEDIA |
-| S05–S06 SkinMamba | PyTorch, timm, einops, NumPy, Pillow; compatibilidad de selective scan incluida por el adaptador | venv común primero; extensión CUDA solo si el diagnóstico y una prueba muestran que es necesaria | pendiente de diagnóstico CEDIA |
-| S07–S08 | PyTorch, torchvision y `segmentation-models-pytorch==0.5.0` | mismo venv SMP de S04 | pendiente de diagnóstico CEDIA |
-| S09 SegFormer | PyTorch, torchvision, transformers, NumPy, Pillow | venv separado si transformers entra en conflicto | pendiente de diagnóstico CEDIA |
-| S10 y S14 VM-UNet | PyTorch, timm, einops, NumPy, Pillow; selective scan de compatibilidad local | venv común primero | pendiente de diagnóstico CEDIA |
-| S11 | PyTorch, NumPy y Pillow; arquitectura Attention U-Net local | Python del contenedor o venv común | pendiente de diagnóstico CEDIA |
-| S12–S13 | PyTorch, NumPy y Pillow; arquitecturas locales U-Net/Inception | Python del contenedor o venv común | pendiente de diagnóstico CEDIA |
-| S15 DeLightSAM | PyTorch, torchvision, timm, einops, NumPy y Pillow; código fuente externo fijado | venv propio si sus versiones resultan incompatibles | pendiente de diagnóstico CEDIA |
-| S16 GrabCut/P0/métricas | Python 3.10, NumPy, OpenCV, Pillow, SciPy y scikit-image; PyYAML para configuración | venv de benchmark persistente si faltan paquetes | pendiente de diagnóstico CEDIA |
-| B2 | Lo anterior según backend; AdamW y CUDA de PyTorch | `B2_VENV_ROOT/S01`…`S15` permite separar solo los métodos que realmente lo necesiten | pendiente de diagnóstico CEDIA |
-| Darknet YOLOv3 | gcc, g++, make, CUDA/nvcc y cuDNN para una compilación GPU; CFG y bootstrap weights ya fijados | binario persistente bajo el proyecto, compilado una vez después del diagnóstico | pendiente de diagnóstico CEDIA |
-
-No se debe crear otra imagen antes de demostrar una incompatibilidad. Si faltan
-paquetes, la primera opción es un venv persistente creado desde el Python del
-contenedor; las plantillas aceptan `VENV_PATH` o, para B2, venvs por método bajo
-`B2_VENV_ROOT`. La instalación se hará una sola vez fuera de los jobs, después
-de revisar el diagnóstico. El proyecto, datos y resultados se enlazan al
-contenedor mediante `--bind` y la GPU mediante `--nv`.
-
-## Paralelismo comprobado en el código
-
-- Darknet se invoca sin `-gpus`; cada proceso usa la única GPU que SLURM le
-  haga visible. No hay entrenamiento multi-GPU implementado.
-- B2 no usa DDP ni `DataParallel`. Cada tarea carga un modelo y lo mueve a
-  `cuda`; por tanto usa una GPU.
-- `CUDA_VISIBLE_DEVICES` lo establece SLURM. Las plantillas lo registran y no
-  lo sobrescriben.
-- YOLO mapea `SLURM_ARRAY_TASK_ID=0..4` directamente al fold 0..4.
-- B2 mapea `task // 5` a S01..S15 y `task % 5` al fold 0..4.
-- Darknet reanuda desde `RESUME_WEIGHTS` o el backup más reciente. B2 añade
-  `--resume` cuando existe `training_state.pt`.
-- Los checkpoints B2 se congelan después con `freeze_b2.py`; este exige 75
-  checkpoints y verifica protocolo, modelo, fold y SHA-256.
-- Las plantillas rechazan manifests distintos de `split=train`. B2 además
-  verifica los cinco YOLO congelados y sus hashes antes de arrancar.
-
-La solicitud inicial por tarea es una A100 de 40 GB, 32 CPU y 60 GB RAM,
-obtenida conservadoramente al dividir la reserva histórica de dos GPU, 64 CPU y
-120 GB. No implica que el entrenamiento use eficazmente todos esos CPU o RAM.
-Tras medir un job representativo, reduzca la solicitud si el uso real lo permite.
-
-## Plantillas SLURM
-
-Las fuentes versionables son:
-
-- `scripts/hpc/train_yolo_cedia.slurm`: cinco folds,
-  `--array=0-4%2`, una GPU por tarea;
-- `scripts/hpc/train_b2_cedia.slurm`: quince modelos por cinco folds,
-  `--array=0-74%2`, una GPU por tarea.
-
-No las envíe hasta validar el diagnóstico, preparar los folds en las rutas
-remotas y confirmar una compilación GPU de Darknet. Ejemplo de variables; solo
-`$HOME` es conocido y las demás rutas deben coincidir con lo observado:
-
-```bash
-export PROJECT_ROOT="$HOME/Thesis_Fitzpatrick"
-export DATA_ROOT="$PROJECT_ROOT/data/raw/isic2018_task1"
-export SIF_PATH="/ruta/confirmada/en/CEDIA/pytorch_24.01-py3.sif"
-export DARKNET_GPU_CONFIRMED=YES
-# Envío manual posterior, no durante el diagnóstico:
-# sbatch scripts/hpc/train_yolo_cedia.slurm
-```
-
-B2 permanece bloqueado hasta validar y congelar los cinco detectores:
-
-```bash
-export PROJECT_ROOT="$HOME/Thesis_Fitzpatrick"
-export DATA_ROOT="$PROJECT_ROOT/data/raw/isic2018_task1"
-export SIF_PATH="/ruta/confirmada/en/CEDIA/pytorch_24.01-py3.sif"
-export YOLO_FROZEN_ROOT="$PROJECT_ROOT/results/benchmark_v1/yolo"
-# Envío manual posterior:
-# sbatch scripts/hpc/train_b2_cedia.slurm
-```
-
-Los scripts registran job, tarea, host, fecha UTC, GPU visible y Git HEAD en
-`results/benchmark_v1/{yolo,b2}/logs/`. Los checkpoints y estados se escriben
-en rutas persistentes. Una señal conserva el último backup Darknet o la última
-época B2 terminada para volver a presentar la misma tarea.
-
-## Transferencia compatible con Open OnDemand
-
-Las opciones admitidas son:
-
-1. Después del commit y push manuales, clonar o actualizar GitHub desde la
-   terminal web de CEDIA, si el nodo permite salida a Internet.
-2. Subir un archivo comprimido del repositorio con el administrador de archivos
-   del portal y extraerlo desde la terminal web.
-3. Descargar datasets desde sus fuentes oficiales usando la terminal web, si
-   CEDIA permite salida; los descargadores del proyecto son reanudables.
-4. Subir datasets mediante el administrador web cuando su tamaño lo permita.
-5. Reutilizar copias ya presentes en CEDIA después de verificar manifests y
-   SHA-256.
-
-La elección depende de cuota, almacenamiento y conectividad revelados por el
-diagnóstico. El test sellado no se transfiere, inspecciona ni ejecuta durante
-esta preparación.
-
-## Orden posterior
-
-1. Ejecutar el diagnóstico en terminal normal y, si es posible, en una sesión
-   interactiva con una A100.
-2. Revisar runtime, ruta/hash de SIF, paquetes, CUDA/cuDNN, compiladores, cuota y
-   límites SLURM.
-3. Elegir y verificar las rutas persistentes de proyecto, datos y resultados.
-4. Preparar una sola vez los venv estrictamente necesarios y compilar Darknet
-   GPU dentro del entorno confirmado.
-5. Regenerar en CEDIA las etiquetas/listas YOLO, porque contienen rutas
-   absolutas del clúster; auditar round-trip y fugas.
-6. Presentar los cinco folds YOLO, validar cada fold y congelar sus hashes.
-7. Generar P0 con el detector correspondiente a cada fold.
-8. Presentar B2; verificar y congelar los 75 checkpoints.
-9. Ejecutar evaluación de desarrollo. El test sellado continúa cerrado hasta
-   la congelación científica final.
+Opciones compatibles: clonar/pull desde GitHub en la terminal web; descargar
+fuentes oficiales desde CEDIA; subir archivos mediante Open OnDemand Files; o
+reutilizar datasets ya presentes después de verificar manifests/hashes. No se
+requiere ni documenta SSH, scp, sftp, rsync o túneles.

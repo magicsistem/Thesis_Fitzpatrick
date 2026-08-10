@@ -50,6 +50,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--run-id")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--confirm-run", action="store_true")
+    parser.add_argument("--reuse-p0-cache", action="store_true")
+    parser.add_argument("--warmup", type=int, default=0)
+    parser.add_argument("--repetitions", type=int, default=1)
     return parser.parse_args()
 
 
@@ -123,7 +126,7 @@ def main() -> None:
                 if condition == "C0":
                     p0 = None
                 else:
-                    p0 = run_p0(image, config, detector, cache_root=artifact_root / "preprocessing", **STAGES[condition])
+                    p0 = run_p0(image, config, detector, cache_root=artifact_root / "preprocessing", reuse_cache=args.reuse_p0_cache, **STAGES[condition])
                 for method in methods:
                     output = run_directory / "predictions" / condition / method["method_id"] / image.image_id
                     output.mkdir(parents=True)
@@ -143,7 +146,10 @@ def main() -> None:
                         atomic_write_png(output / "native_mask.png", backend.native_mask * 255)
                     else:
                         adapter_input = item["image_path"] if condition == "C0" else p0.cache_directory / "roi_input.png"
-                        backend = evaluation_cli._neural_backend(method, adapter_input, output / "native_mask.png")
+                        backend = evaluation_cli._neural_backend(
+                            method, adapter_input, output / "native_mask.png",
+                            warmup=args.warmup, repetitions=args.repetitions,
+                        )
                     if backend.failure_code:
                         final = np.zeros(rgb.shape[:2], dtype=np.uint8)
                         post = {"skipped": True, "reason": backend.failure_code}

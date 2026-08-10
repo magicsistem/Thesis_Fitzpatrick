@@ -445,7 +445,7 @@ def benchmark_summaries(results: list[dict]) -> list[dict]:
     return summaries
 
 
-def run_adapter(model: dict, image_path: Path, lesion_path: Path) -> tuple[bool, str, dict | None]:
+def run_adapter(model: dict, image_path: Path, lesion_path: Path, *, internal_warmup: int = 0) -> tuple[bool, str, dict | None]:
     """Run a configured adapter without invoking a shell."""
     template = model.get("adapter_command")
     if not template:
@@ -453,18 +453,30 @@ def run_adapter(model: dict, image_path: Path, lesion_path: Path) -> tuple[bool,
     if not isinstance(template, list) or not all(isinstance(token, str) for token in template):
         return False, "adapter_command debe ser una lista JSON de argumentos.", None
     lesion_path.parent.mkdir(parents=True, exist_ok=True)
+    adapter_metrics_path = lesion_path.with_suffix(lesion_path.suffix + ".adapter_metrics.json")
+    adapter_metrics_path.unlink(missing_ok=True)
     replacements = {
         "{image}": str(image_path),
         "{lesion_mask}": str(lesion_path),
         "{repo_root}": str(REPO_ROOT),
         "{python}": sys.executable,
         "{conda}": os.environ.get("CONDA_EXE") or shutil.which("conda") or "conda",
+        "{device}": os.environ.get("THESIS_DEVICE", "cpu"),
     }
     command = []
     for token in template:
         for placeholder, value in replacements.items():
             token = token.replace(placeholder, value)
         command.append(token)
+    adapter_python = os.environ.get("THESIS_ADAPTER_PYTHON")
+    if adapter_python:
+        try:
+            python_index = command.index("python")
+        except ValueError:
+            python_index = -1
+        if python_index < 0:
+            return False, "THESIS_ADAPTER_PYTHON está definido, pero el comando no contiene python.", None
+        command = [adapter_python, *command[python_index + 1 :]]
     before = resource.getrusage(resource.RUSAGE_CHILDREN)
     start = time.perf_counter()
     peak_rss_kb = 0
@@ -472,6 +484,7 @@ def run_adapter(model: dict, image_path: Path, lesion_path: Path) -> tuple[bool,
         process = subprocess.Popen(
             command,
             cwd=REPO_ROOT,
+            env={**os.environ, "THESIS_ADAPTER_METRICS_PATH": str(adapter_metrics_path), "THESIS_ADAPTER_WARMUP": str(internal_warmup)},
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -491,6 +504,11 @@ def run_adapter(model: dict, image_path: Path, lesion_path: Path) -> tuple[bool,
     except OSError as exc:
         return False, str(exc), None
     metrics = _runtime_metrics(start, peak_rss_kb, before)
+    if adapter_metrics_path.is_file():
+        try:
+            metrics["adapter"] = json.loads(adapter_metrics_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            metrics["adapter"] = {"error": "invalid adapter timing sidecar"}
     if process.returncode != 0:
         detail = stderr.strip() or stdout.strip() or "sin detalle"
         lesion_path.unlink(missing_ok=True)

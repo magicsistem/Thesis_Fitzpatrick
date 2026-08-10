@@ -7,8 +7,9 @@ resultados científicos.
 ## Estado real
 
 - S01–S15 son exactamente las quince entradas, en orden de `priority`, de
-  `configs/segmentation_models.json`; conservan los subprocesos y el entorno
-  `thesis-avit`.
+  `configs/segmentation_models.json`. Localmente conservan sus subprocesos y
+  `thesis-avit`; en CEDIA el mismo catálogo usa el Python persistente mediante
+  `THESIS_ADAPTER_PYTHON`, sin suponer Conda remoto.
 - S16 es un único backend GrabCut con modos `classic` y `robust`.
 - A, B1, B2 y C0–C3 tienen identidades distintas en manifests. B2 exige pesos
   con metadatos `protocol=B2`; nunca acepta pesos nativos bajo otra etiqueta.
@@ -179,14 +180,15 @@ conda run --no-capture-output -n tesis-sam python scripts/benchmark/yolov3.py tr
 margen se hace solamente con validación; después:
 
 La ejecución en CEDIA se prepara exclusivamente mediante Open OnDemand. No se
-presupone Conda remoto ni una copia local de la SIF. Ejecute primero el
-diagnóstico y siga [`CEDIA_OPEN_ONDEMAND.md`](CEDIA_OPEN_ONDEMAND.md). La
+presupone Conda remoto ni una copia de la laptop. La SIF confirmada se valida
+por tamaño/hash y se complementa con un venv persistente. Siga
+[`CEDIA_FROM_ZERO.md`](CEDIA_FROM_ZERO.md). La
 plantilla versionable es `scripts/hpc/train_yolo_cedia.slurm`; usa cinco tareas,
 dos concurrentes y una A100 por tarea. Las rutas del proyecto, datos y SIF son
 variables obligatorias observadas en CEDIA, no valores inventados.
 
-Antes de enviarlo en un nodo GPU, compile la misma revisión de Darknet allí
-con `GPU=1`, `CUDNN=1` y los flags admitidos por ese nodo. El binario local
+Antes de enviarlo en un nodo GPU, `bootstrap_cedia.sh` compila la misma revisión
+de Darknet con `GPU=1`, `CUDNN=1` y arquitectura A100 (compute 8.0). El binario local
 registrado fue compilado para CPU y no convierte en GPU un job por solicitar
 `--gres=gpu:1`. Si la cola o módulos de CEDIA difieren, cambie solo las
 directivas de recursos y el paso de activación del entorno, no los folds,
@@ -233,10 +235,11 @@ conda run --no-capture-output -n tesis-sam python scripts/benchmark/run_evaluati
   --data-root "/RUTA/ISIC2018" --limit 5 --confirm-run
 ```
 
-Para benchmarking temporal use `--warmup 1 --repetitions 3`. Se registran
-mediana, P25, P75, P95, CPU y RAM de proceso. El tiempo del adaptador incluye
-arranque/carga del subproceso y se etiqueta así; `end_to_end_time_ms` incluye P0
-y posprocesado por separado.
+Para benchmarking temporal use `--warmup 1 --repetitions 3`. El warm-up ocurre
+dentro del mismo proceso y modelo que el forward medido. Se registran mediana,
+P25, P75, P95, carga del modelo, forward sincronizado, CPU, RAM y VRAM cuando
+CUDA está activa. El tiempo de pared del adaptador incluye arranque/carga del
+subproceso y se etiqueta así; `end_to_end_time_ms` incluye P0 y posprocesado.
 
 ```fish
 conda run --no-capture-output -n tesis-sam python scripts/benchmark/run_ablation.py \

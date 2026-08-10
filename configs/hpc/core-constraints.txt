@@ -1,0 +1,4 @@
+# Prevent pip from replacing the CUDA stack supplied by pytorch_24.01-py3.sif.
+numpy==1.24.4
+torch==2.2.0a0+81ea7a4
+torchvision==0.17.0a0

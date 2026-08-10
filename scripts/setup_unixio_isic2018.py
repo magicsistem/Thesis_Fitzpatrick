@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
-import urllib.request
+import sys
 
 from _project_paths import REPO_ROOT
+sys.path.insert(0, str(REPO_ROOT / "src"))
+from thesis_fitzpatrick.datasets import download_resumable  # noqa: E402
 
 
 MODEL_REVISION = "2a8b59e2de58d87370a92956cdea250ddf95531d"
@@ -36,24 +38,9 @@ def download(name: str, expected_sha: str) -> None:
         print(f"{name} ya está descargado y verificado.")
         return
     CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
-    temporary = destination.with_suffix(destination.suffix + ".download")
-    temporary.unlink(missing_ok=True)
     url = f"{BASE_URL}/{name}?download=true"
     print(f"Descargando {name} desde la revisión fijada {MODEL_REVISION}...", flush=True)
-    try:
-        with urllib.request.urlopen(url) as response, temporary.open("wb") as output:
-            while chunk := response.read(1024 * 1024):
-                output.write(chunk)
-    except Exception:
-        temporary.unlink(missing_ok=True)
-        raise
-    actual_sha = sha256(temporary)
-    if actual_sha != expected_sha:
-        temporary.unlink(missing_ok=True)
-        raise SystemExit(
-            f"Checkpoint {name} inválido: esperado {expected_sha}, obtenido {actual_sha}."
-        )
-    temporary.replace(destination)
+    download_resumable(url, destination, expected_sha)
     print(f"Checkpoint {name} verificado: {expected_sha}")
 
 
