@@ -54,10 +54,16 @@ def load_model(source: Path, checkpoint: Path, device: str):
     try:
         import torch
         from Models.Transformer.ViT_adapters import ViTSeg_CNNprompt_adapt
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            f"Falta el módulo {exc.name!r} para ejecutar AViT. "
+            "En CEDIA ejecuta scripts/hpc/bootstrap_cedia.sh --execute; "
+            "en local usa configs/environments/avit-cpu.yml."
+        ) from exc
     except ImportError as exc:
         raise RuntimeError(
-            "Falta una dependencia de AViT. Crea el entorno con "
-            "configs/environments/avit-cpu.yml."
+            "AViT encontró una importación incompatible. "
+            "Vuelve a ejecutar el bootstrap reproducible de AViT."
         ) from exc
 
     model = ViTSeg_CNNprompt_adapt(

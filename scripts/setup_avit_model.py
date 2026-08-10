@@ -19,6 +19,10 @@ MODEL_ROOT = REPO_ROOT / "models" / "avit"
 SOURCE_DIR = MODEL_ROOT / "source"
 CHECKPOINT_DIR = MODEL_ROOT / "checkpoints"
 CHECKPOINT_PATH = CHECKPOINT_DIR / CHECKPOINT_NAME
+UNUSED_GUI_IMPORTS = (
+    Path("Models/CNN/ResNet.py"),
+    Path("Models/Decoders.py"),
+)
 
 
 def run(command: list[str], *, cwd: Path = REPO_ROOT) -> None:
@@ -51,6 +55,32 @@ def install_source() -> None:
     print(f"Código AViT fijado en {SOURCE_COMMIT}.")
 
 
+def patch_unused_gui_imports(source_dir: Path = SOURCE_DIR) -> None:
+    """Remove AViT's unused Turtle import without requiring Tk on headless nodes."""
+    bad_import = "from turtle import forward"
+    for relative_path in UNUSED_GUI_IMPORTS:
+        path = source_dir / relative_path
+        if not path.is_file():
+            raise SystemExit(f"No se encontró el archivo AViT esperado: {path}")
+        original = path.read_text(encoding="utf-8")
+        lines = original.splitlines()
+        matches = sum(line.strip() == bad_import for line in lines)
+        if matches > 1:
+            raise SystemExit(
+                f"Parche AViT inseguro: {path} contiene {matches} importaciones de Turtle."
+            )
+        if matches == 1:
+            patched = "\n".join(line for line in lines if line.strip() != bad_import)
+            if original.endswith("\n"):
+                patched += "\n"
+            path.write_text(patched, encoding="utf-8")
+            print(f"Parche headless aplicado: {relative_path}")
+        else:
+            print(f"Parche headless ya presente: {relative_path}")
+        if bad_import in path.read_text(encoding="utf-8"):
+            raise SystemExit(f"No se pudo retirar la importación de Turtle de {path}")
+
+
 def install_checkpoint() -> None:
     if CHECKPOINT_PATH.is_file() and sha256(CHECKPOINT_PATH) == CHECKPOINT_SHA256:
         print("Checkpoint AViT ya descargado y verificado.")
@@ -79,6 +109,7 @@ def install_checkpoint() -> None:
 
 def main() -> None:
     install_source()
+    patch_unused_gui_imports()
     install_checkpoint()
     print("AViT está listo para la prueba de inferencia.")
 

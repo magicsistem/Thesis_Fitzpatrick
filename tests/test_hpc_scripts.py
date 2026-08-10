@@ -96,6 +96,17 @@ class HPCScriptTests(unittest.TestCase):
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertIn("DRY RUN", completed.stdout)
 
+    def test_bootstrap_verifies_avit_runtime_after_model_setup(self):
+        bootstrap = (HPC_ROOT / "bootstrap_inside_container.sh").read_text(encoding="utf-8")
+        setup_index = bootstrap.index('python "scripts/$setup_script"')
+        verify_index = bootstrap.index("python scripts/hpc/verify_avit_runtime.py")
+        self.assertGreater(verify_index, setup_index)
+
+        requirements = (REPO_ROOT / "configs/hpc/requirements-cuda.txt").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("einops==", requirements)
+
     def test_resource_manifest_covers_catalog_and_has_fixed_identities(self):
         resources = json.loads((REPO_ROOT / "configs/hpc/external_resources.json").read_text(encoding="utf-8"))
         catalog = json.loads((REPO_ROOT / "configs/segmentation_models.json").read_text(encoding="utf-8"))["models"]

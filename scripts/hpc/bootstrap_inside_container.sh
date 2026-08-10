@@ -34,6 +34,7 @@ if [[ "$MODE" == models ]]; then
     for setup_script in "${setup_scripts[@]}"; do
         python "scripts/$setup_script"
     done
+    python scripts/hpc/verify_avit_runtime.py
     python scripts/setup_yolov3_darknet.py --download-bootstrap --confirm-download \
         --expected-weights-sha256 2495c2690283e4e0bc2050cbd4660b77a8074e14e9c11150c6412fd63db496a7 \
         --build --gpu
