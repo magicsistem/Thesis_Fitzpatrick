@@ -27,7 +27,7 @@ cd "$PROJECT_ROOT"
 mkdir -p "$PROJECT_ROOT/.cedia"
 
 CURRENT_STAGE="Git traceability check"
-[[ "$(git branch --show-current)" == "$PIPELINE_BRANCH" ]] || { echo "Expected branch $PIPELINE_BRANCH" >&2; exit 2; }
+[[ "$(git rev-parse --abbrev-ref HEAD)" == "$PIPELINE_BRANCH" ]] || { echo "Expected branch $PIPELINE_BRANCH" >&2; exit 2; }
 [[ -z "$(git status --porcelain --untracked-files=all)" ]] || { echo "Git worktree must be clean before submission" >&2; git status --short >&2; exit 2; }
 GIT_HEAD=$(git rev-parse HEAD)
 git merge-base --is-ancestor "$GIT_HEAD" "origin/$PIPELINE_BRANCH" || { echo "HEAD is not published on origin/$PIPELINE_BRANCH" >&2; exit 2; }
