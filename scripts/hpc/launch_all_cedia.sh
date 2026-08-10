@@ -19,7 +19,7 @@ CURRENT_STAGE=initialization
 fail() {
     rc=$?
     echo "Pipeline launcher failed rc=$rc stage=$CURRENT_STAGE" >&2
-    [[ ! -f "$JOB_FILE" ]] || { echo "Jobs already submitted before the failure:" >&2; cat "$JOB_FILE" >&2; }
+    [[ ! -f "$JOB_FILE" ]] || { echo "Submission registry at failure (job IDs appear only if sbatch succeeded):" >&2; cat "$JOB_FILE" >&2; }
     exit "$rc"
 }
 trap fail ERR
@@ -86,7 +86,7 @@ YOLO_JOB=$(submit YOLO_JOB --dependency="afterok:$SMOKE_JOB" scripts/hpc/train_y
 FINALIZE_YOLO_JOB=$(submit FINALIZE_YOLO_JOB --dependency="afterok:$YOLO_JOB" scripts/hpc/finalize_yolo_cedia.slurm)
 P0_JOB=$(submit P0_JOB --dependency="afterok:$FINALIZE_YOLO_JOB" scripts/hpc/prepare_p0_oof_cedia.slurm)
 B2_JOB=$(submit B2_JOB --dependency="afterok:$P0_JOB" scripts/hpc/train_b2_cedia.slurm)
-CONFIG_JOB=$(submit CONFIG_JOB --dependency="afterok:$FINALIZE_YOLO_JOB" --job-name=thesis-config --partition=gpu --nodes=1 --ntasks=1 --cpus-per-task=2 --mem=8G --gres=gpu:a100-sxm4-40gb:1 --time=00:20:00 --output=slurm-thesis-config-%j.out --error=slurm-thesis-config-%j.err --wrap='cd "$PROJECT_ROOT" && python3 scripts/hpc/configure_benchmark_cedia.py --frozen-yolo "$YOLO_FROZEN_ROOT/fold-0/frozen.json"')
+CONFIG_JOB=$(submit CONFIG_JOB --dependency="afterok:$FINALIZE_YOLO_JOB" --job-name=thesis-config --partition=gpu --nodes=1 --ntasks=1 --cpus-per-task=32 --mem=60G --gres=gpu:a100-sxm4-40gb:1 --time=00:20:00 --output=slurm-thesis-config-%j.out --error=slurm-thesis-config-%j.err --wrap='cd "$PROJECT_ROOT" && python3 scripts/hpc/configure_benchmark_cedia.py --frozen-yolo "$YOLO_FROZEN_ROOT/fold-0/frozen.json"')
 BENCHMARK_JOB=$(submit BENCHMARK_JOB --dependency="afterok:$CONFIG_JOB" scripts/hpc/run_benchmark_cedia.slurm)
 B2_FINAL_JOB=$(submit B2_FINAL_JOB --dependency="afterok:$B2_JOB:$CONFIG_JOB" scripts/hpc/finalize_b2_cedia.slurm)
 

@@ -49,6 +49,27 @@ class HPCScriptTests(unittest.TestCase):
         self.assertIn("#SBATCH --array=0-5%1", benchmark)
         self.assertIn("stages=(A B1 C0 C1 C2 C3)", benchmark)
 
+    def test_every_a100_submission_satisfies_cedia_gpu_qos_floor(self):
+        templates = list(HPC_ROOT.glob("*.slurm")) + [
+            HPC_ROOT / "launch_all_cedia.sh"
+        ]
+        for path in templates:
+            text = path.read_text(encoding="utf-8")
+            if "gpu:a100-sxm4-40gb:1" not in text:
+                continue
+            cpu_requests = [
+                int(value)
+                for value in re.findall(r"--cpus-per-task=(\d+)", text)
+            ]
+            memory_requests = [
+                int(value)
+                for value in re.findall(r"--mem=(\d+)G", text)
+            ]
+            self.assertTrue(cpu_requests, path)
+            self.assertTrue(memory_requests, path)
+            self.assertTrue(all(value >= 32 for value in cpu_requests), path)
+            self.assertTrue(all(value >= 60 for value in memory_requests), path)
+
     def test_cedia_files_do_not_assume_laptop_paths_or_remote_conda(self):
         paths = [
             HPC_ROOT / "inspect_cedia_environment.sh",

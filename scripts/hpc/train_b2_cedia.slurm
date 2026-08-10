@@ -4,8 +4,8 @@
 #SBATCH --partition=gpu
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=8
-#SBATCH --mem=48G
+#SBATCH --cpus-per-task=32
+#SBATCH --mem=60G
 #SBATCH --gres=gpu:a100-sxm4-40gb:1
 #SBATCH --time=24:00:00
 #SBATCH --array=0-74%2
