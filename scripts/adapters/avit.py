@@ -17,6 +17,10 @@ from _runtime import timed_forward, write_metrics
 
 CHECKPOINT_SHA256 = "9b4ad401483d96535769433f4781da42179bec6a7ef932a1d02a7f786e9f24db"
 IMAGE_SIZE = 224
+UNUSED_GUI_IMPORTS = (
+    Path("Models/CNN/ResNet.py"),
+    Path("Models/Decoders.py"),
+)
 
 
 def sha256(path: Path) -> str:
@@ -36,6 +40,29 @@ def preprocess(image: Image.Image) -> np.ndarray:
     return (values - mean) / std
 
 
+def ensure_headless_source(source: Path) -> None:
+    """Remove AViT's unused Turtle imports before importing the model code."""
+    bad_import = "from turtle import forward"
+    for relative_path in UNUSED_GUI_IMPORTS:
+        path = source / relative_path
+        if not path.is_file():
+            raise FileNotFoundError(f"No se encontró el archivo oficial de AViT: {path}")
+        original = path.read_text(encoding="utf-8")
+        lines = original.splitlines()
+        matches = sum(line.strip() == bad_import for line in lines)
+        if matches > 1:
+            raise RuntimeError(
+                f"Parche AViT inseguro: {path} contiene {matches} importaciones de Turtle."
+            )
+        if matches == 1:
+            patched = "\n".join(line for line in lines if line.strip() != bad_import)
+            if original.endswith("\n"):
+                patched += "\n"
+            path.write_text(patched, encoding="utf-8")
+        if bad_import in path.read_text(encoding="utf-8"):
+            raise RuntimeError(f"No se pudo retirar la importación de Turtle de {path}")
+
+
 def load_model(source: Path, checkpoint: Path, device: str):
     if not (source / "Models" / "Transformer" / "ViT_adapters.py").is_file():
         raise FileNotFoundError(
@@ -50,6 +77,7 @@ def load_model(source: Path, checkpoint: Path, device: str):
     actual_sha = sha256(checkpoint)
     verify_checkpoint(checkpoint, actual_sha, CHECKPOINT_SHA256, "avit")
 
+    ensure_headless_source(source)
     sys.path.insert(0, str(source))
     try:
         import torch
