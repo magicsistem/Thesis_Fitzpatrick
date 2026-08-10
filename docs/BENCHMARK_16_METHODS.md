@@ -35,13 +35,13 @@ resultados científicos.
   binario CPU SHA-256 `b4817514584d850387e6accabc88f8a7f64d2424f218420c83101d99195d7a4e`
   y `darknet53.conv.74` SHA-256
   `2495c2690283e4e0bc2050cbd4660b77a8074e14e9c11150c6412fd63db496a7`.
-- Los cinco folds YOLO están preparados en `results/benchmark_v1/yolo/`, cada
-  uno con 2.594 etiquetas y auditoría sin fallos. Los cinco entrenamientos no
-  se han presentado como terminados: esta máquina no tiene CUDA, `sbatch` ni
-  acceso HPC configurado. El array listo es `train_yolo.slurm`.
-- Los 75 comandos B2 y su array están en `results/benchmark_v1/b2/`; dependen
-  de los cinco detectores congelados y de P0 generado con ellos. Hay 0/75
-  checkpoints B2, por lo que B2 y el test sellado permanecen bloqueados.
+- Los cinco folds YOLO están preparados localmente en
+  `results/benchmark_v1/yolo/`, cada uno con 2.594 etiquetas y auditoría sin
+  fallos. Sus listas contienen rutas de la laptop y deben regenerarse dentro
+  de CEDIA. Los cinco entrenamientos continúan pendientes.
+- Hay 0/75 checkpoints B2. B2 y el test sellado permanecen bloqueados. Las
+  plantillas remotas versionables están bajo `scripts/hpc/`; los antiguos
+  command files bajo `results/` son artefactos locales y no deben enviarse.
 
 ## Datasets
 
@@ -178,19 +178,12 @@ conda run --no-capture-output -n tesis-sam python scripts/benchmark/yolov3.py tr
 `--resume /RUTA/A/BACKUP.weights` reanuda. La selección de confianza, NMS y
 margen se hace solamente con validación; después:
 
-Los cinco comandos ya preparados en este repositorio pueden enviarse como un
-array desde la raíz del proyecto:
-
-```fish
-sbatch "results/benchmark_v1/yolo/train_yolo.slurm"
-```
-
-Los archivos bajo `results/` son artefactos locales ignorados, no plantillas
-portables para copiar entre máquinas. En el HPC, regenere los command files y
-arrays después de ubicar el repositorio en su ruta definitiva. Verifique antes
-que `conda` esté disponible para jobs no interactivos y que existan los
-entornos `tesis-sam` y `thesis-avit`; el proyecto no presupone SSH configurado
-ni una imagen SIF local.
+La ejecución en CEDIA se prepara exclusivamente mediante Open OnDemand. No se
+presupone Conda remoto ni una copia local de la SIF. Ejecute primero el
+diagnóstico y siga [`CEDIA_OPEN_ONDEMAND.md`](CEDIA_OPEN_ONDEMAND.md). La
+plantilla versionable es `scripts/hpc/train_yolo_cedia.slurm`; usa cinco tareas,
+dos concurrentes y una A100 por tarea. Las rutas del proyecto, datos y SIF son
+variables obligatorias observadas en CEDIA, no valores inventados.
 
 Antes de enviarlo en un nodo GPU, compile la misma revisión de Darknet allí
 con `GPU=1`, `CUDNN=1` y los flags admitidos por ese nodo. El binario local
@@ -267,20 +260,12 @@ conda run --no-capture-output -n tesis-sam python scripts/benchmark/train_b2.py 
 
 Quite `--dry-run`, añada `--confirm-training` y opcionalmente `--device cuda`.
 Una interrupción se recupera repitiendo con `--resume --confirm-training`.
-Genere el array SLURM reproducible con esos 75 comandos ya quoted y revíselo
-antes de enviarlo:
-
-```fish
-conda run --no-capture-output -n tesis-sam python scripts/benchmark/generate_slurm.py \
-  --command-file "results/benchmark_v1/b2/commands.txt" \
-  --output "results/benchmark_v1/b2/train_b2.slurm" --job-name thesis-b2 \
-  --time 48:00:00 --memory 32G --cpus 4 --gres gpu:1
-
-sbatch "results/benchmark_v1/b2/train_b2.slurm"
-```
-
-El script no presupone módulos o rutas propios de un HPC; adapte únicamente
-los recursos SLURM a la máquina de destino.
+El command file generado localmente contiene rutas de la laptop y no es una
+plantilla remota. Para CEDIA use `scripts/hpc/train_b2_cedia.slurm`, después del
+diagnóstico y únicamente cuando los cinco detectores estén validados y
+congelados. La plantilla mapea 75 tareas a S01–S15 × folds 0–4, limita la
+concurrencia a dos y solicita una A100 por tarea. Valida hashes YOLO y
+`split=train` antes de iniciar; no presupone que `thesis-avit` exista en CEDIA.
 
 B2 se evalúa solo con un registro que incluya los quince paths y SHA-256:
 

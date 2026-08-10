@@ -69,6 +69,9 @@ pixels are not used for colour statistics.
   adapter, post-processing, and runtime-measurement details.
 - [`docs/BENCHMARK_16_METHODS.md`](docs/BENCHMARK_16_METHODS.md): P0, datasets,
   YOLOv3, S01–S16, A/B1/B2, C0–C3, annotation, HPC, and sealed-test commands.
+- [`docs/CEDIA_OPEN_ONDEMAND.md`](docs/CEDIA_OPEN_ONDEMAND.md): read-only CEDIA
+  diagnosis, container requirements, single-GPU SLURM templates, and transfer
+  options through the web portal.
 
 ## Repository policy
 
