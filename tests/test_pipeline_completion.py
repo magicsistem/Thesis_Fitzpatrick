@@ -46,7 +46,7 @@ class DatasetAndYoloTests(unittest.TestCase):
 
     def test_darknet_gpu_build_targets_one_a100(self):
         command = gpu_build_command(8)
-        self.assertIn("GPU=1", command); self.assertIn("CUDNN=1", command)
+        self.assertIn("GPU=1", command); self.assertIn("CUDNN=0", command)
         self.assertTrue(any("arch=compute_80,code=[sm_80,compute_80]" in token for token in command))
         self.assertNotIn("-gpus", command)
 

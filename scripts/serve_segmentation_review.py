@@ -470,10 +470,15 @@ def run_adapter(model: dict, image_path: Path, lesion_path: Path, *, internal_wa
         command.append(token)
     adapter_python = os.environ.get("THESIS_ADAPTER_PYTHON")
     if adapter_python:
-        try:
-            python_index = command.index("python")
-        except ValueError:
-            python_index = -1
+        python_index = next(
+            (
+                index
+                for index, token in enumerate(command)
+                if Path(token).name in {"python", "python3"}
+                or Path(token).name.startswith("python3.")
+            ),
+            -1,
+        )
         if python_index < 0:
             return False, "THESIS_ADAPTER_PYTHON está definido, pero el comando no contiene python.", None
         command = [adapter_python, *command[python_index + 1 :]]

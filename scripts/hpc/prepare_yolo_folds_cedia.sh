@@ -11,8 +11,8 @@ case "$MODE" in
     --dry-run)
         echo "project=$PROJECT_ROOT"
         echo "data_root=$DATA_ROOT"
-        echo "train_manifest=${TRAIN_MANIFEST:-$DATA_ROOT/manifests/isic2018_task1_train.json}"
-        echo "folds=${FOLDS_FILE:-$DATA_ROOT/manifests/isic2018_task1_train_folds_5.json}"
+        echo "train_manifest=${TRAIN_MANIFEST:-$DATA_ROOT/manifests/isic2018_task1_train_disjoint.json}"
+        echo "folds=${FOLDS_FILE:-$DATA_ROOT/manifests/isic2018_task1_train_disjoint_folds_5.json}"
         echo "DRY RUN: execution would use one CPU container invocation."
         ;;
     --execute)

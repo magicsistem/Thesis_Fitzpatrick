@@ -204,7 +204,10 @@ class ReviewServerTests(unittest.TestCase):
                     "{repo_root}/lesion_mask.png",
                 ]
             }
-            with patch.object(review, "REPO_ROOT", root):
+            with patch.object(review, "REPO_ROOT", root), patch.dict(
+                review.os.environ,
+                {"THESIS_ADAPTER_PYTHON": sys.executable},
+            ):
                 success, _, _ = review.run_adapter(model, Path("unused.jpg"), lesion_path)
             self.assertTrue(success)
 
