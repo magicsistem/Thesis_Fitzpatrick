@@ -1,6 +1,7 @@
 """Install pinned UltraLight VM-UNet source and its published checkpoint."""
 
 from __future__ import annotations
+import shutil
 
 import hashlib
 from pathlib import Path

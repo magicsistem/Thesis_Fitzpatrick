@@ -9,7 +9,7 @@ MODE=${1:-models}
 [[ "$MODE" == dependencies || "$MODE" == models ]] || { echo "Mode must be dependencies or models" >&2; exit 2; }
 
 if [[ ! -x "$VENV_PATH/bin/python" ]]; then
-    python3 -m venv --system-site-packages "$VENV_PATH"
+    python3 -m venv --without-pip --system-site-packages "$VENV_PATH"
 fi
 source "$VENV_PATH/bin/activate"
 python -m pip install --disable-pip-version-check \

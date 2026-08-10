@@ -25,7 +25,7 @@ def cpu_build_command(jobs: int = 4) -> list[str]:
 def gpu_build_command(jobs: int = 8) -> list[str]:
     """Build the pinned Darknet for the A100 architecture without system OpenCV."""
     return [
-        "make", "GPU=1", "CUDNN=1", "CUDNN_HALF=0", "OPENCV=0",
+        "make", "GPU=1", "CUDNN=0", "CUDNN_HALF=0", "OPENCV=0",
         "ARCH=-gencode arch=compute_80,code=[sm_80,compute_80]", f"-j{jobs}",
     ]
 
