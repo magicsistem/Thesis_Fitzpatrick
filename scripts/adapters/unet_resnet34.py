@@ -8,6 +8,7 @@ from pathlib import Path
 
 import numpy as np
 from PIL import Image, ImageOps
+from _checkpoint import verify_checkpoint
 
 
 CHECKPOINT_SHA256 = "1ea87e341552768234b367c3b68704030bc1bc08991c323508ea5c5086d9d334"
@@ -37,11 +38,7 @@ def load_model(checkpoint: Path):
             "Ejecuta scripts/setup_unet_resnet34.py."
         )
     actual_sha = sha256(checkpoint)
-    if actual_sha != CHECKPOINT_SHA256:
-        raise ValueError(
-            "El SHA-256 del checkpoint U-Net/ResNet34 no coincide: "
-            f"esperado {CHECKPOINT_SHA256}, obtenido {actual_sha}."
-        )
+    verify_checkpoint(checkpoint, actual_sha, CHECKPOINT_SHA256, "unet-resnet34-isic2018")
     try:
         import segmentation_models_pytorch as smp
         import torch

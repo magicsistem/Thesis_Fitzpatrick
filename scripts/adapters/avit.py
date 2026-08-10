@@ -10,6 +10,7 @@ import sys
 
 import numpy as np
 from PIL import Image, ImageOps
+from _checkpoint import verify_checkpoint
 
 
 CHECKPOINT_SHA256 = "9b4ad401483d96535769433f4781da42179bec6a7ef932a1d02a7f786e9f24db"
@@ -45,11 +46,7 @@ def load_model(source: Path, checkpoint: Path, device: str):
             "Ejecuta scripts/setup_avit_model.py."
         )
     actual_sha = sha256(checkpoint)
-    if actual_sha != CHECKPOINT_SHA256:
-        raise ValueError(
-            "El SHA-256 del checkpoint AViT no coincide: "
-            f"esperado {CHECKPOINT_SHA256}, obtenido {actual_sha}."
-        )
+    verify_checkpoint(checkpoint, actual_sha, CHECKPOINT_SHA256, "avit")
 
     sys.path.insert(0, str(source))
     try:

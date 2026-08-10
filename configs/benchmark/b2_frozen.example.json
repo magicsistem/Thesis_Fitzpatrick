@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "frozen": false,
+  "evaluation": "B2",
+  "base_config": "configs/benchmark/default.json",
+  "dataset_id": "isic2018_task1",
+  "split": "test",
+  "b2_checkpoints": {},
+  "note": "Copy to a local candidate only after all 15 standardized B2 checkpoints exist. Set frozen=true only after validation; never put fabricated hashes here."
+}

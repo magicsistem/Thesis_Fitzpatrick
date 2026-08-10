@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
 import csv
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import json
@@ -15,7 +17,7 @@ import shutil
 import subprocess
 import sys
 import time
-from urllib.parse import unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 from PIL import Image
 
@@ -28,6 +30,13 @@ from thesis_fitzpatrick.masks import (  # noqa: E402
     normalize_binary_mask,
     save_binary_mask,
 )
+from thesis_fitzpatrick.benchmark import (  # noqa: E402
+    evaluation_registry,
+    load_benchmark_methods,
+    load_json,
+    validate_dataset_registry,
+)
+from thesis_fitzpatrick.annotations import project_status, save_mask_version  # noqa: E402
 
 
 WEB_DIR = REPO_ROOT / "web"
@@ -40,6 +49,10 @@ INPUT_ROOTS = {
 }
 METADATA_CSV = REPO_ROOT / "data" / "raw" / "isic_fitzpatrick_metadata_full.csv"
 RESULTS_DIR = REPO_ROOT / "results" / "segmentation_benchmark"
+BENCHMARK_CONFIG = REPO_ROOT / "configs" / "benchmark" / "default.json"
+DATASET_CONFIG = REPO_ROOT / "configs" / "benchmark" / "datasets.json"
+BENCHMARK_ARTIFACT_ROOT = REPO_ROOT / "results" / "benchmark_v1"
+ANNOTATION_PROJECT = REPO_ROOT / "data" / "interim" / "fitzpatrick_annotations_v1"
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp"}
 FITZPATRICK_TYPES = ("I", "II", "III", "IV", "V", "VI")
 
@@ -47,6 +60,122 @@ FITZPATRICK_TYPES = ("I", "II", "III", "IV", "V", "VI")
 def load_models() -> list[dict]:
     payload = json.loads(MODEL_CONFIG.read_text(encoding="utf-8"))
     return sorted(payload["models"], key=lambda model: model["priority"])
+
+
+def benchmark_state() -> dict:
+    methods = load_benchmark_methods(MODEL_CONFIG)
+    datasets = validate_dataset_registry(load_json(DATASET_CONFIG))
+    config = load_json(BENCHMARK_CONFIG)
+    yolo = config["p0"]["yolo"]
+    yolo_paths = [yolo.get("cfg_path"), yolo.get("weights_path")]
+    frozen_yolo = yolo.get("frozen_manifest")
+    yolo_error = None
+    yolo_ready = all(
+        value and (REPO_ROOT / value).is_file()
+        for value in yolo_paths
+    ) and yolo.get("confidence_threshold") is not None and yolo.get("nms_threshold") is not None
+    if frozen_yolo and (REPO_ROOT / frozen_yolo).is_file():
+        try:
+            frozen_detector = load_json(REPO_ROOT / frozen_yolo)
+            yolo_ready = frozen_detector.get("status") == "frozen" and all(
+                (Path(value) if Path(value).is_absolute() else REPO_ROOT / value).is_file()
+                for value in (frozen_detector.get("cfg_path", ""), frozen_detector.get("weights_path", ""))
+            )
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            yolo_ready, yolo_error = False, str(exc)
+    b2_path = BENCHMARK_ARTIFACT_ROOT / "b2_frozen.json"
+    missing_b2 = [method["method_id"] for method in methods if method["kind"] == "neural"]
+    if b2_path.is_file():
+        try:
+            frozen_b2 = load_json(b2_path)
+            identities = frozen_b2.get("b2_checkpoints", {}) if frozen_b2.get("frozen") is True else {}
+            missing_b2 = []
+            for method in (item for item in methods if item["kind"] == "neural"):
+                members = (identities.get(method["method_id"]) or {}).get("members", [])
+                if len(members) not in {1, 5} or any(not (Path(member["path"]) if Path(member["path"]).is_absolute() else REPO_ROOT / member["path"]).is_file() for member in members):
+                    missing_b2.append(method["method_id"])
+        except (OSError, ValueError, json.JSONDecodeError):
+            pass
+    evaluations = evaluation_registry(methods)
+    b2_evaluation = next(item for item in evaluations if item["id"] == "B2")
+    if not missing_b2:
+        b2_evaluation.update({"available": True, "reason": None, "missing_methods": []})
+    else:
+        b2_evaluation["missing_methods"] = missing_b2
+    backend_resources = {}
+    for method in methods:
+        path = BENCHMARK_ARTIFACT_ROOT / "resources" / f"{method['method_id']}.json"
+        if path.is_file(): backend_resources[method["method_id"]] = load_json(path)
+    return {
+        "schema_version": 1,
+        "methods": methods,
+        "evaluations": evaluations,
+        "datasets": datasets,
+        "implementation": {
+            "contracts_and_registries": "ready",
+            "p0": "ready_with_yolo_fallback",
+            "s16_classic": "ready",
+            "s16_robust": "ready",
+            "metrics": "ready",
+            "native_review_ui": "ready",
+            "ablation_s01_s15": "ready",
+            "b2_training": "ready_pending_training_runs",
+            "sealed_execution": "ready_and_locked",
+        },
+        "resources": {
+            "yolov3": {
+                "available": yolo_ready,
+                "architecture": yolo["architecture"],
+                "message": "Disponible" if yolo_ready else yolo_error or "Faltan cfg/pesos YOLOv3 locales; P0 usa fallback FOV registrado.",
+            },
+            "b2_checkpoints": {"available": not missing_b2, "missing_count": len(missing_b2), "missing_methods": missing_b2, "registry": str(b2_path.relative_to(REPO_ROOT))},
+            "isic2018_task1_manifest": {
+                "available": any((REPO_ROOT / "data" / "raw" / "isic2018_task1" / "manifests").glob("isic2018_task1_*.json")),
+            },
+            "backends": backend_resources,
+        },
+    }
+
+
+def benchmark_runs() -> list[dict]:
+    runs = []
+    for path in sorted((BENCHMARK_ARTIFACT_ROOT / "runs").glob("*/run_manifest.json"), reverse=True):
+        try:
+            manifest = load_json(path)
+        except (OSError, ValueError, json.JSONDecodeError):
+            continue
+        runs.append({key: manifest.get(key) for key in ("run_id", "status", "evaluation", "conditions", "dataset", "split", "methods", "images", "created_utc", "completed_utc")})
+    return runs
+
+
+def benchmark_run(run_id: str) -> dict:
+    if not run_id or any(char not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.-" for char in run_id):
+        raise ValueError("run_id inválido")
+    root = require_within(BENCHMARK_ARTIFACT_ROOT / "runs" / run_id, (BENCHMARK_ARTIFACT_ROOT / "runs",), "Run")
+    manifest = load_json(root / "run_manifest.json")
+    report = load_json(root / "report.json") if (root / "report.json").is_file() else None
+    local_image_urls = {item["id"]: item["url"] for item in list_images()}
+    results = []
+    for path in sorted((root / "predictions").rglob("result.json")):
+        payload = load_json(path)
+        relative_root = path.parent.relative_to(root).as_posix()
+        artifacts = {}
+        if payload.get("original_preview") and (root / payload["original_preview"]).is_file():
+            artifacts["original_image.jpg"] = f"/files/benchmark/{run_id}/{payload['original_preview']}"
+        elif payload.get("image_id") in local_image_urls:
+            artifacts["original_image.jpg"] = local_image_urls[payload["image_id"]]
+        if payload.get("ground_truth_preview") and (root / payload["ground_truth_preview"]).is_file(): artifacts["ground_truth.png"] = f"/files/benchmark/{run_id}/{payload['ground_truth_preview']}"
+        if payload.get("overlay_preview") and (path.parent / payload["overlay_preview"]).is_file(): artifacts["prediction_overlay.jpg"] = f"/files/benchmark/{run_id}/{relative_root}/{payload['overlay_preview']}"
+        for name in ("native_mask.png", "pre_postprocess_mask.png", "final_mask.png", "raw_probability.npy"):
+            if (path.parent / name).is_file(): artifacts[name] = f"/files/benchmark/{run_id}/{relative_root}/{name}"
+        cache_key = payload.get("p0_cache_key")
+        if cache_key:
+            p0_root = BENCHMARK_ARTIFACT_ROOT / "preprocessing" / str(payload.get("dataset_id") or manifest.get("dataset")) / str(payload["image_id"]) / str(cache_key)
+            for name in ("fov_mask.png", "hair_mask.png", "segmentation_input.png", "yolo_overlay.png", "roi_input.png", "yolo_bbox.json"):
+                if (p0_root / name).is_file(): artifacts[name] = f"/files/artifact/preprocessing/{payload.get('dataset_id') or manifest.get('dataset')}/{payload['image_id']}/{cache_key}/{name}"
+        payload["artifacts"] = artifacts
+        results.append(payload)
+    return {"manifest": manifest, "report": report, "results": results}
 
 
 def load_image_metadata() -> dict[str, dict]:
@@ -403,14 +532,35 @@ class ReviewHandler(SimpleHTTPRequestHandler):
         self.wfile.write(content)
 
     def do_GET(self) -> None:  # noqa: N802
-        path = unquote(urlparse(self.path).path)
+        parsed = urlparse(self.path)
+        path = unquote(parsed.path)
+        query = parse_qs(parsed.query)
         if path == "/api/state":
             images = list_images()
             self._json({
                 "models": load_models(),
                 "images": initial_images(images),
                 "pool": pool_summary(images),
+                "benchmark": benchmark_state(),
             })
+            return
+        if path == "/api/benchmark/state":
+            self._json(benchmark_state())
+            return
+        if path == "/api/benchmark/runs":
+            self._json({"runs": benchmark_runs()})
+            return
+        if path == "/api/benchmark/run":
+            try: self._json(benchmark_run(query.get("run_id", [""])[0]))
+            except (ValueError, FileNotFoundError) as exc: self._json({"error": str(exc)}, status=404)
+            return
+        if path == "/api/annotations/state":
+            if not (ANNOTATION_PROJECT / "project.json").is_file(): self._json({"available": False, "message": "Inicialice el proyecto con scripts/benchmark/annotations.py init"})
+            else:
+                status = project_status(ANNOTATION_PROJECT)
+                urls = {item["id"]: item["url"] for item in list_images()}
+                for item in status["items"]: item["url"] = urls.get(item["image_id"])
+                self._json({"available": True, **status})
             return
         if path.startswith("/files/input/"):
             relative = path.removeprefix("/files/input/")
@@ -423,18 +573,32 @@ class ReviewHandler(SimpleHTTPRequestHandler):
         if path.startswith("/files/result/"):
             self._serve_file(RESULTS_DIR / path.removeprefix("/files/result/"), RESULTS_DIR)
             return
+        if path.startswith("/files/benchmark/"):
+            self._serve_file(BENCHMARK_ARTIFACT_ROOT / "runs" / path.removeprefix("/files/benchmark/"), BENCHMARK_ARTIFACT_ROOT / "runs")
+            return
+        if path.startswith("/files/artifact/"):
+            self._serve_file(BENCHMARK_ARTIFACT_ROOT / path.removeprefix("/files/artifact/"), BENCHMARK_ARTIFACT_ROOT)
+            return
         if path == "/":
             path = "/index.html"
         self._serve_file(WEB_DIR / path.lstrip("/"), WEB_DIR)
 
     def do_POST(self) -> None:  # noqa: N802
-        if self.path not in {"/api/infer", "/api/sample"}:
+        path = urlparse(self.path).path
+        if path not in {"/api/infer", "/api/sample", "/api/annotations/save"}:
             self.send_error(404)
             return
         try:
             length = int(self.headers.get("Content-Length", "0"))
             request = json.loads(self.rfile.read(length))
-            if self.path == "/api/sample":
+            if path == "/api/annotations/save":
+                if not (ANNOTATION_PROJECT / "project.json").is_file(): raise ValueError("Proyecto de anotación no inicializado")
+                encoded = str(request.get("png_data_url", ""))
+                if not encoded.startswith("data:image/png;base64,"): raise ValueError("Se requiere una máscara PNG")
+                png = base64.b64decode(encoded.partition(",")[2], validate=True)
+                record = save_mask_version(ANNOTATION_PROJECT, str(request.get("image_id", "")), str(request.get("role", "")), str(request.get("mask_type", "")), png, actor=str(request.get("actor", "")), note=str(request.get("note", "")))
+                self._json({"saved": record, "status": project_status(ANNOTATION_PROJECT)}); return
+            if path == "/api/sample":
                 images = list_images()
                 total = int(request.get("total", 12))
                 seed = int(request.get("seed", 42))
@@ -490,7 +654,7 @@ class ReviewHandler(SimpleHTTPRequestHandler):
                         image_metadata=image_record,
                     ))
             self._json({"results": results, "summaries": benchmark_summaries(results)})
-        except (ValueError, json.JSONDecodeError) as exc:
+        except (ValueError, json.JSONDecodeError, binascii.Error) as exc:
             self._json({"error": str(exc)}, status=400)
 
 

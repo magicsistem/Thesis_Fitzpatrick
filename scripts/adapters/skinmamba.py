@@ -15,6 +15,7 @@ import types
 
 import numpy as np
 from PIL import Image, ImageOps
+from _checkpoint import verify_checkpoint
 
 
 CHECKPOINT_SHA256 = {
@@ -160,10 +161,7 @@ def load_model(source: Path, checkpoint: Path, dataset: str):
         )
     expected = CHECKPOINT_SHA256[dataset]
     actual = sha256(checkpoint)
-    if actual != expected:
-        raise ValueError(
-            f"El SHA-256 de SkinMamba {dataset} no coincide: esperado {expected}, obtenido {actual}."
-        )
+    verify_checkpoint(checkpoint, actual, expected, f"skinmamba-{dataset}")
     try:
         import torch
     except ImportError as exc:

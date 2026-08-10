@@ -9,9 +9,8 @@ import sys
 
 from PIL import Image
 
-from _project_paths import resolve_input, resolve_result_output
+from _project_paths import REPO_ROOT, resolve_input, resolve_result_output
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from thesis_fitzpatrick.masks import (  # noqa: E402

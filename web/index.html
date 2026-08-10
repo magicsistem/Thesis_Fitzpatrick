@@ -14,6 +14,15 @@
       <p>Selecciona modelos e imágenes. Cada resultado separa la lesión de la piel circundante candidata.</p>
     </header>
 
+    <nav class="tabs" aria-label="Evaluaciones">
+      <button class="tab active" type="button" data-tab="native">A · Nativos</button>
+      <button class="tab" type="button" data-tab="common">B · Pipeline común</button>
+      <button class="tab" type="button" data-tab="ablations">Ablaciones</button>
+      <button class="tab" type="button" data-tab="sealed">Test sellado</button>
+    </nav>
+
+    <div id="tab-native" class="tab-panel">
+
     <section aria-labelledby="models-title">
       <div class="section-heading">
         <div><span class="step">1</span><h2 id="models-title">Modelos</h2></div>
@@ -64,6 +73,62 @@
         <article id="slide"></article>
       </div>
     </section>
+    <section aria-labelledby="annotation-title">
+      <div class="section-heading"><div><span class="step">GT</span><h2 id="annotation-title">Anotación Fitzpatrick</h2></div></div>
+      <p id="annotation-status">Consultando proyecto de anotación…</p>
+      <div id="annotation-workspace" hidden>
+        <div class="annotation-controls">
+          <label>Imagen <select id="annotation-image"></select></label>
+          <label>Rol <select id="annotation-role"><option value="annotator_1">Primer anotador</option><option value="annotator_2">Segundo anotador</option><option value="adjudicator">Adjudicación</option></select></label>
+          <label>Máscara <select id="annotation-type"><option value="lesion">Lesión</option><option value="fov">FOV</option></select></label>
+          <label>Identidad <input id="annotation-actor" required></label>
+          <label>Trazo <input id="annotation-brush" type="range" min="2" max="60" value="18"></label>
+          <button id="annotation-clear" type="button" class="secondary">Limpiar</button>
+          <button id="annotation-save" type="button">Guardar versión</button>
+        </div>
+        <div class="annotation-canvases"><canvas id="annotation-reference"></canvas><canvas id="annotation-mask"></canvas></div>
+        <p class="notice">Cada guardado crea una versión inmutable y registra actor, rol, fecha y SHA-256. La adjudicación no sobrescribe las dos lecturas.</p>
+      </div>
+    </section>
+    </div>
+
+    <div id="tab-common" class="tab-panel" hidden>
+      <section aria-labelledby="common-title">
+        <div class="section-heading"><div><span class="step">B</span><h2 id="common-title">Pipeline común P0</h2></div></div>
+        <label class="evaluation-selector" for="common-evaluation">Protocolo
+          <select id="common-evaluation"><option value="B1">B1 — checkpoints congelados</option><option value="B2">B2 — modelos reentrenados</option></select>
+        </label>
+        <div id="common-state" class="status-grid"></div>
+        <p class="notice">Las corridas se preparan por CLI. Esta pestaña nunca presenta B1 como si fuera B2.</p>
+        <div class="run-controls"><label>Run real <select id="common-run"></select></label><button id="load-common-run" type="button">Cargar artefactos</button></div>
+        <div id="common-run-view"></div>
+      </section>
+    </div>
+
+    <div id="tab-ablations" class="tab-panel" hidden>
+      <section aria-labelledby="ablation-title">
+        <div class="section-heading"><div><span class="step">C</span><h2 id="ablation-title">Ablaciones C0–C3</h2></div></div>
+        <div class="condition-grid">
+          <article><strong>C0</strong><span>Original · sin FOV, vello ni YOLO</span></article>
+          <article><strong>C1</strong><span>FOV</span></article>
+          <article><strong>C2</strong><span>FOV + vello</span></article>
+          <article><strong>C3</strong><span>FOV + vello + YOLO/ROI</span></article>
+        </div>
+        <p id="ablation-state" class="notice"></p>
+        <div class="run-controls"><label>Run de ablación <select id="ablation-run"></select></label><button id="load-ablation-run" type="button">Comparar C0–C3</button></div>
+        <div id="ablation-run-view"></div>
+      </section>
+    </div>
+
+    <div id="tab-sealed" class="tab-panel" hidden>
+      <section aria-labelledby="sealed-title">
+        <div class="section-heading"><div><span class="step">🔒</span><h2 id="sealed-title">Test ISIC 2018 sellado</h2></div></div>
+        <p class="locked">Bloqueado por defecto</p>
+        <p id="sealed-state"></p>
+        <p>No se muestran GT ni métricas intermedias y no se habilita ejecución hasta congelar código, configuración, manifest y los 15 checkpoints B2.</p>
+        <div id="sealed-runs"></div>
+      </section>
+    </div>
   </main>
   <script src="/app.js" defer></script>
 </body>

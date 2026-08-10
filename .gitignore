@@ -50,6 +50,12 @@ models/
 *.tar
 *.tar.gz
 *.7z
+*.sif
+
+# Temporary / resumable-download files
+*.part
+*.partial
+*.tmp
 
 # Logs
 logs/

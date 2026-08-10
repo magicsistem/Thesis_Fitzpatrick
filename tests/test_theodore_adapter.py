@@ -31,6 +31,20 @@ class TheodoreAdapterTests(unittest.TestCase):
         for digest in theodore_isic2018.CHECKPOINTS.values():
             self.assertEqual(len(digest), hashlib.sha256().digest_size * 2)
 
+    def test_segformer_v4_keys_are_normalized_for_transformers_v5(self) -> None:
+        state = {
+            "model.segformer.encoder.block.0.1.attention.self.query.weight": object(),
+            "model.decode_head.linear_c.2.proj.weight": object(),
+        }
+        expected = {
+            "model.segformer.stages.0.blocks.1.attention.q_proj.weight": object(),
+            "model.decode_head.linear_projections.2.proj.weight": object(),
+        }
+        self.assertEqual(
+            set(theodore_isic2018.normalize_segformer_state_dict(state, expected)),
+            set(expected),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -58,6 +58,7 @@ def install_source() -> None:
 
 def install_checkpoint() -> None:
     if CHECKPOINT_PATH.is_file() and sha256(CHECKPOINT_PATH) == CHECKPOINT_SHA256:
+        ARCHIVE_PATH.unlink(missing_ok=True)
         print("Checkpoint UltraLight VM-UNet ya descargado y verificado.")
         return
     CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
@@ -76,6 +77,7 @@ def install_checkpoint() -> None:
         raise SystemExit(
             f"Checkpoint inválido: esperado {CHECKPOINT_SHA256}, obtenido {checkpoint_hash}."
         )
+    ARCHIVE_PATH.unlink()
     print(f"Checkpoint verificado: {CHECKPOINT_SHA256}")
 
 

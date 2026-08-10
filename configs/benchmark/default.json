@@ -1,0 +1,88 @@
+{
+  "schema_version": 1,
+  "seed": 20260806,
+  "artifact_root": "results/benchmark_v1",
+  "store_raw_probability": false,
+  "store_web_previews": true,
+  "p0": {
+    "fov": {
+      "peripheral_band_fraction": 0.06,
+      "median_kernel_fraction": 0.006,
+      "minimum_relative_contrast": 18.0,
+      "absolute_dark_safety": 24,
+      "closing_kernel_fraction": 0.012,
+      "minimum_valid_area_fraction": 0.25,
+      "minimum_external_area_fraction": 0.002,
+      "fallback_policy": "full_image"
+    },
+    "hair": {
+      "line_length_fraction": 0.035,
+      "line_thickness_fraction": 0.002,
+      "orientations_degrees": [0, 45, 90, 135],
+      "response_percentile": 90.0,
+      "minimum_elongation": 2.5,
+      "maximum_component_thickness_fraction": 0.025,
+      "dilation_fraction": 0.003,
+      "maximum_coverage_fraction": 0.18,
+      "high_coverage_policy": "skip_inpainting",
+      "inpaint_method": "telea",
+      "inpaint_radius_fraction": 0.004
+    },
+    "yolo": {
+      "architecture": "YOLOv3-Darknet53",
+      "class_names": ["lesion"],
+      "input_size": [512, 512],
+      "training": {
+        "batch_size": 64,
+        "subdivisions": 16,
+        "learning_rate": 0.001,
+        "momentum": 0.9,
+        "weight_decay": 0.0005,
+        "bbox_perturbation_fraction": 0.05
+      },
+      "frozen_manifest": null,
+      "cfg_path": null,
+      "weights_path": null,
+      "confidence_threshold": null,
+      "nms_threshold": null,
+      "selection_policy": "highest_confidence",
+      "fallback_policy": "full_fov"
+    },
+    "roi": {
+      "margin_fraction": 0.2,
+      "margin_candidates": [0.0, 0.1, 0.2, 0.3],
+      "bbox_convention": "xyxy_half_open"
+    }
+  },
+  "grabcut": {
+    "classic": {
+      "margin_fraction": 0.05,
+      "margin_candidates": [0.02, 0.05, 0.1],
+      "iterations": 5,
+      "iteration_candidates": [3, 5, 10]
+    },
+    "robust": {
+      "iterations": 5,
+      "iteration_candidates": [3, 5, 10],
+      "color_space": "bgr",
+      "color_space_candidates": ["bgr", "lab"]
+    },
+    "nearly_complete_fraction": 0.98
+  },
+  "postprocessing": {
+    "opening_kernel_fraction": 0.003,
+    "closing_kernel_fraction": 0.008,
+    "minimum_component_area_fraction": 0.0005,
+    "maximum_hole_area_fraction": 0.002
+  },
+  "metrics": {
+    "threshold_jaccard_cutoff": 0.65,
+    "boundary_tolerance_diagonal_fraction": 0.01,
+    "bootstrap_repetitions": 10000
+  },
+  "benchmark": {
+    "warmup_repetitions": 1,
+    "measurement_repetitions": 3,
+    "adapter_timeout_seconds": 900
+  }
+}

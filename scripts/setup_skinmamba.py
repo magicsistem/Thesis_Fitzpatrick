@@ -63,6 +63,7 @@ def install_checkpoints() -> None:
         (CHECKPOINT_DIR / name).is_file() and sha256(CHECKPOINT_DIR / name) == expected
         for name, expected in CHECKPOINTS.items()
     ):
+        ARCHIVE_PATH.unlink(missing_ok=True)
         print("Checkpoints SkinMamba ya descargados y verificados.")
         return
     CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
@@ -84,6 +85,7 @@ def install_checkpoints() -> None:
                     f"Checkpoint {name} inválido: esperado {expected}, obtenido {actual}."
                 )
             print(f"Checkpoint {name} verificado: {expected}")
+    ARCHIVE_PATH.unlink()
 
 
 def main() -> None:

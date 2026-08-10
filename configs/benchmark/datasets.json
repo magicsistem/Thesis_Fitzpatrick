@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "datasets": [
+    {
+      "id": "isic2018_task1",
+      "name": "ISIC 2018 Task 1",
+      "enabled": true,
+      "role": "primary_benchmark",
+      "expected_counts": {"train": 2594, "validation": 100, "test": 1000},
+      "official_source": "https://challenge.isic-archive.com/landing/2018/45/",
+      "import_command": "python scripts/benchmark/manage_datasets.py import-isic2018 --data-root /RUTA/ISIC2018 --split train --output /RUTA/manifests/isic2018_task1_train.json",
+      "allowed_uses": ["development", "training", "validation", "sealed_test"],
+      "warning": "Test is sealed: its masks must not be used for tuning, boxes, thresholds, or visual debugging."
+    },
+    {
+      "id": "isic2018_novice_masks",
+      "name": "ISIC 2018 Novice Segmentation Masks",
+      "enabled": false,
+      "role": "optional_noisy_annotation_robustness",
+      "expected_counts": {"auxiliary": 11720},
+      "official_source": "https://api.isic-archive.com/doi/isic-2018-novice-segmentation-masks/",
+      "doi": "10.34970/387951",
+      "allowed_uses": ["post_freeze_robustness_only"],
+      "warning": "NO APTO PARA ELEGIR EL MODELO PRINCIPAL"
+    },
+    {
+      "id": "imapp",
+      "name": "IMA++",
+      "enabled": false,
+      "role": "optional_external_multi_annotator",
+      "expected_counts": {"train": 1675, "validation": 240, "test": 479},
+      "official_source": "https://zenodo.org/records/14201693",
+      "version": "1.1",
+      "license": "CC BY-NC-ND 4.0",
+      "allowed_uses": ["external_evaluation"],
+      "warning": "Prefer STAPLE when supplied; report majority voting and individual annotators separately."
+    },
+    {
+      "id": "fitzpatrick_external",
+      "name": "Cohorte Fitzpatrick externa",
+      "enabled": true,
+      "role": "post_freeze_fairness_review",
+      "expected_counts": {"external": 93},
+      "allowed_uses": ["visual_review", "fairness_evaluation_with_independent_ground_truth"],
+      "warning": "Do not report segmentation accuracy without independent lesion ground truth."
+    },
+    {
+      "id": "synthetic_test",
+      "name": "Dataset sintético de pruebas",
+      "enabled": true,
+      "role": "automated_testing_only",
+      "expected_counts": {},
+      "allowed_uses": ["unit_test", "integration_smoke"],
+      "warning": "Synthetic outputs are never scientific results."
+    }
+  ]
+}

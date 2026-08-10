@@ -8,6 +8,7 @@ from pathlib import Path
 
 import numpy as np
 from PIL import Image, ImageOps
+from _checkpoint import verify_checkpoint
 
 
 IMAGE_SIZE = 256
@@ -130,10 +131,7 @@ def load_model(checkpoint: Path, variant: str):
         )
     expected_sha = CHECKPOINTS[variant]
     actual_sha = sha256(checkpoint)
-    if actual_sha != expected_sha:
-        raise ValueError(
-            f"SHA-256 inválido para {variant}: esperado {expected_sha}, obtenido {actual_sha}."
-        )
+    verify_checkpoint(checkpoint, actual_sha, expected_sha, f"unixio-{variant.replace('_', '-')}-isic2018")
     import torch
 
     try:

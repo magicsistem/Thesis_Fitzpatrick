@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "dataset_id": "isic2018_task1",
+  "split": "train",
+  "items": [
+    {
+      "image_id": "ISIC_0000000",
+      "image_path": "images/ISIC_0000000.jpg",
+      "mask_paths": ["masks/ISIC_0000000_segmentation.png"],
+      "patient_id": null,
+      "lesion_id": null,
+      "duplicate_group_id": "ISIC_0000000",
+      "fitzpatrick": null,
+      "fov_mask_path": null,
+      "annotator": null,
+      "adjudication_status": null
+    }
+  ]
+}

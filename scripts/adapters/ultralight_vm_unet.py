@@ -10,6 +10,7 @@ import types
 
 import numpy as np
 from PIL import Image, ImageOps
+from _checkpoint import verify_checkpoint
 
 
 CHECKPOINT_SHA256 = "43b11155c19c2296707ec4dee3c417529ea0b54eb111adee864b2274ec8df52a"
@@ -48,11 +49,7 @@ def load_model(source: Path, checkpoint: Path):
             "Ejecuta scripts/setup_ultralight_vm_unet.py."
         )
     actual_sha = sha256(checkpoint)
-    if actual_sha != CHECKPOINT_SHA256:
-        raise ValueError(
-            "El SHA-256 del checkpoint UltraLight VM-UNet no coincide: "
-            f"esperado {CHECKPOINT_SHA256}, obtenido {actual_sha}."
-        )
+    verify_checkpoint(checkpoint, actual_sha, CHECKPOINT_SHA256, "ultralight-vm-unet")
 
     try:
         import torch

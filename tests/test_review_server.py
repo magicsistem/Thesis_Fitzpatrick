@@ -49,6 +49,18 @@ class ReviewServerTests(unittest.TestCase):
             self.assertIsNotNone(model["adapter_command"])
             self.assertIn("verified", model["checkpoint_status"])
         self.assertIn("pool", payload)
+        self.assertEqual(len(payload["benchmark"]["methods"]), 16)
+        evaluations = {item["id"]: item for item in payload["benchmark"]["evaluations"]}
+        self.assertTrue(evaluations["B1"]["available"])
+        self.assertFalse(evaluations["B2"]["available"])
+        self.assertFalse(payload["benchmark"]["resources"]["yolov3"]["available"])
+
+    def test_benchmark_state_endpoint_exposes_locked_resources(self) -> None:
+        with urlopen(f"{self.base_url}/api/benchmark/state") as response:
+            payload = json.load(response)
+        self.assertEqual(payload["schema_version"], 1)
+        self.assertEqual(payload["implementation"]["s16_classic"], "ready")
+        self.assertEqual(payload["implementation"]["sealed_execution"], "ready_and_locked")
 
     def test_stratified_sample_balances_six_fitzpatrick_types(self) -> None:
         images = [

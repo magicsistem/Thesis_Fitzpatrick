@@ -9,6 +9,7 @@ import sys
 
 import numpy as np
 from PIL import Image, ImageOps
+from _checkpoint import verify_checkpoint
 
 
 CHECKPOINT_SHA256 = "62b4148b26b01b0b17b4125d74115ed49c507eab4d39ec8ff8e063a2f7980233"
@@ -86,11 +87,7 @@ def load_model(source: Path, checkpoint: Path):
             "Ejecuta scripts/setup_ba_transformer.py."
         )
     actual_sha = sha256(checkpoint)
-    if actual_sha != CHECKPOINT_SHA256:
-        raise ValueError(
-            "El SHA-256 del checkpoint BA-Transformer no coincide: "
-            f"esperado {CHECKPOINT_SHA256}, obtenido {actual_sha}."
-        )
+    verify_checkpoint(checkpoint, actual_sha, CHECKPOINT_SHA256, "ba-transformer")
     try:
         import torch
     except ImportError as exc:

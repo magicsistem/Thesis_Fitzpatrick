@@ -5,9 +5,11 @@ from __future__ import annotations
 import argparse
 import hashlib
 from pathlib import Path
+import re
 
 import numpy as np
 from PIL import Image, ImageOps
+from _checkpoint import verify_checkpoint
 
 
 IMAGE_SIZE = 128
@@ -18,6 +20,50 @@ CHECKPOINTS = {
     "inception": "18c17a1d87be5906b31a76558132e3c3fc16e643747b8e0859c25cb914eadce9",
     "segformer": "0dcb4e5c9d19ab4caffaa324e4cf26090bcc9d37fb47840e38d81268691d8341",
 }
+
+
+def normalize_segformer_state_dict(state: dict, expected: dict) -> dict:
+    """Translate Transformers 4.x SegFormer keys to their 5.x names."""
+    if state.keys() == expected.keys():
+        return state
+
+    normalized = {}
+    for key, value in state.items():
+        key = re.sub(
+            r"\.segformer\.encoder\.patch_embeddings\.(\d+)\.",
+            r".segformer.stages.\1.patch_embeddings.",
+            key,
+        )
+        key = re.sub(
+            r"\.segformer\.encoder\.block\.(\d+)\.(\d+)\.",
+            r".segformer.stages.\1.blocks.\2.",
+            key,
+        )
+        key = re.sub(
+            r"\.segformer\.encoder\.layer_norm\.(\d+)\.",
+            r".segformer.stages.\1.layer_norm.",
+            key,
+        )
+        key = re.sub(
+            r"\.decode_head\.linear_c\.(\d+)\.",
+            r".decode_head.linear_projections.\1.",
+            key,
+        )
+        for old, new in (
+            (".layer_norm_1.", ".layernorm_before."),
+            (".attention.self.query.", ".attention.q_proj."),
+            (".attention.self.key.", ".attention.k_proj."),
+            (".attention.self.value.", ".attention.v_proj."),
+            (".attention.self.sr.", ".attention.sequence_reduction.sequence_reduction."),
+            (".attention.self.layer_norm.", ".attention.sequence_reduction.layer_norm."),
+            (".attention.output.dense.", ".attention.o_proj."),
+            (".layer_norm_2.", ".layernorm_after."),
+            (".mlp.dense1.", ".mlp.fc1."),
+            (".mlp.dense2.", ".mlp.fc2."),
+        ):
+            key = key.replace(old, new)
+        normalized[key] = value
+    return normalized
 
 
 def sha256(path: Path) -> str:
@@ -110,7 +156,6 @@ def build_model(variant: str, torch):
             self.inception2 = InceptionBlock(256, 128)
             self.inception3 = InceptionBlock(512, 256)
             self.conv1x1 = nn.Conv2d(1024, 2, kernel_size=1)
-            self.upsample = nn.Upsample(scale_factor=8, mode="bilinear", align_corners=True)
 
         def forward(self, x):
             height, width = x.shape[2:]
@@ -153,10 +198,7 @@ def load_model(checkpoint: Path, variant: str):
         )
     expected_sha = CHECKPOINTS[variant]
     actual_sha = sha256(checkpoint)
-    if actual_sha != expected_sha:
-        raise ValueError(
-            f"SHA-256 inválido para {variant}: esperado {expected_sha}, obtenido {actual_sha}."
-        )
+    verify_checkpoint(checkpoint, actual_sha, expected_sha, f"theodore-{variant.replace('_', '-')}-isic2018")
     import torch
 
     model = build_model(variant, torch)
@@ -164,6 +206,8 @@ def load_model(checkpoint: Path, variant: str):
         state = torch.load(checkpoint, map_location="cpu", weights_only=True)
     except TypeError:
         state = torch.load(checkpoint, map_location="cpu")
+    if variant == "segformer":
+        state = normalize_segformer_state_dict(state, model.state_dict())
     model.load_state_dict(state, strict=True)
     model.eval()
     return torch, model

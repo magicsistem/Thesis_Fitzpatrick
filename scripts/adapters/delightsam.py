@@ -11,6 +11,7 @@ import types
 
 import numpy as np
 from PIL import Image, ImageOps
+from _checkpoint import verify_checkpoint
 
 
 CHECKPOINT_SHA256 = "79555730abffb5b39bef5d59afb7b89b13468348b77efa144649b90fddc01778"
@@ -39,10 +40,7 @@ def load_model(source: Path, checkpoint: Path):
             f"No se encontró De-LightSAM en {source}. Ejecuta scripts/setup_delightsam.py."
         )
     actual_sha = sha256(checkpoint)
-    if actual_sha != CHECKPOINT_SHA256:
-        raise ValueError(
-            f"SHA-256 De-LightSAM inválido: esperado {CHECKPOINT_SHA256}, obtenido {actual_sha}."
-        )
+    verify_checkpoint(checkpoint, actual_sha, CHECKPOINT_SHA256, "delightsam-dermoscopy")
     import torch
 
     # model.py imports cv2 but never uses it. Keep OpenCV optional for this adapter.

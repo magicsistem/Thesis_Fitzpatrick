@@ -7,7 +7,11 @@ outside Git.
 
 import argparse
 from pathlib import Path
-import tomllib
+
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python 3.10 compatibility without another install.
+    from pip._vendor import tomli as tomllib
 
 import pandas as pd
 from PIL import Image, ImageOps

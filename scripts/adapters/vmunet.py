@@ -9,6 +9,7 @@ import sys
 
 import numpy as np
 from PIL import Image, ImageOps
+from _checkpoint import verify_checkpoint
 
 IMAGE_SIZE = 256
 CHECKPOINTS = {
@@ -83,10 +84,7 @@ def load_model(source: Path, checkpoint: Path, dataset: str):
         )
     expected_sha = CHECKPOINTS[dataset]
     actual_sha = sha256(checkpoint)
-    if actual_sha != expected_sha:
-        raise ValueError(
-            f"SHA-256 VM-UNet inválido: esperado {expected_sha}, obtenido {actual_sha}."
-        )
+    verify_checkpoint(checkpoint, actual_sha, expected_sha, f"vmunet-{dataset}")
     import torch
     from cpu_selective_scan import selective_scan_fn, selective_scan_ref
 
