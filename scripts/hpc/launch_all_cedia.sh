@@ -3,7 +3,9 @@
 set -Eeuo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
-PROJECT_ROOT=$(cd -- "$SCRIPT_DIR/../.." && pwd -P)
+PROJECT_ROOT_CANDIDATE=${PROJECT_ROOT:-${SLURM_SUBMIT_DIR:-$SCRIPT_DIR/../..}}
+PROJECT_ROOT=$(cd -- "$PROJECT_ROOT_CANDIDATE" && pwd -P)
+
 DATA_ROOT=${DATA_ROOT:-$PROJECT_ROOT/data/raw/isic2018_task1}
 SIF_PATH=${SIF_PATH:-${HOME:?}/pytorch_24.01-py3.sif}
 MANIFEST_ROOT="$DATA_ROOT/manifests"
