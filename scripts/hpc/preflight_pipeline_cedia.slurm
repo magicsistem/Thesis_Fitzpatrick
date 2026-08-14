@@ -26,9 +26,9 @@ trap cleanup EXIT
 trap 'runtime_diag_note_signal TERM; exit 143' TERM INT USR1
 
 bash scripts/hpc/bootstrap_cedia.sh --execute
-python3 scripts/hpc/bootstrap_resources.py --require-sources --require-checkpoints
+scripts/hpc/run_in_container.sh --cpu -- python scripts/hpc/bootstrap_resources.py --require-sources --require-checkpoints
 bash scripts/hpc/prepare_isic2018_cedia.sh --execute
-python3 - "$DATA_ROOT" <<'PY'
+scripts/hpc/run_in_container.sh --cpu -- python - "$DATA_ROOT" <<'PY'
 import json, pathlib, sys
 root = pathlib.Path(sys.argv[1]) / "manifests"
 names = ("isic2018_task1_train_disjoint.json", "isic2018_task1_validation_disjoint.json", "isic2018_task1_test.json")

@@ -97,6 +97,61 @@ class HPCScriptTests(unittest.TestCase):
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertIn("DRY RUN", completed.stdout)
 
+    def test_host_entrypoints_never_execute_project_python_directly(self):
+        # These files are executed by the login node or Slurm's shell.  Python
+        # syntax belongs behind run_in_container.sh; *_inside_container.sh is
+        # deliberately excluded because it is the command passed to that wrapper.
+        host_entrypoints = (
+            "bootstrap_cedia.sh", "validate_existing_cedia.sh",
+            "preflight_pipeline_cedia.slurm", "train_yolo_cedia.slurm",
+            "train_b2_cedia.slurm", "run_benchmark_cedia.slurm",
+            "launch_all_cedia.sh",
+        )
+        for name in host_entrypoints:
+            text = (HPC_ROOT / name).read_text(encoding="utf-8")
+            self.assertNotRegex(text, re.compile(r"(?m)^\\s*python(?:3)?\\s"), name)
+
+    def test_validate_existing_uses_container_python_not_an_old_host_python(self):
+        source = HPC_ROOT / "validate_existing_cedia.sh"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "project"
+            hpc = root / "scripts" / "hpc"; hpc.mkdir(parents=True)
+            target = hpc / source.name
+            target.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+            target.chmod(0o755)
+            calls, host_python = Path(directory) / "container.calls", Path(directory) / "host-python.calls"
+            (hpc / "run_in_container.sh").write_text(
+                "#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >> \"$CALL_LOG\"\nexit 0\n",
+                encoding="utf-8",
+            )
+            (hpc / "run_in_container.sh").chmod(0o755)
+            fake_bin = Path(directory) / "bin"; fake_bin.mkdir()
+            (fake_bin / "python3").write_text(
+                "#!/usr/bin/env bash\nprintf invoked >> \"$HOST_PYTHON_LOG\"\nexit 99\n",
+                encoding="utf-8",
+            )
+            (fake_bin / "python3").chmod(0o755)
+            data = root / "data"; data.mkdir()
+            checkpoint = root / "checkpoint"; checkpoint.write_bytes(b"unchanged-checkpoint")
+            dataset = data / "dataset-sentinel"; dataset.write_bytes(b"unchanged-dataset")
+            before = (checkpoint.read_bytes(), dataset.read_bytes())
+            completed = subprocess.run(
+                ["bash", str(target), "1"], cwd=root, check=False, capture_output=True, text=True,
+                env={**os.environ, "PROJECT_ROOT": str(root), "DATA_ROOT": str(data),
+                     "CALL_LOG": str(calls), "HOST_PYTHON_LOG": str(host_python),
+                     "PATH": f"{fake_bin}:{os.environ['PATH']}"},
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertFalse(host_python.exists(), "validate_existing invoked host python3")
+            self.assertEqual((checkpoint.read_bytes(), dataset.read_bytes()), before)
+            wrapper_calls = calls.read_text(encoding="utf-8")
+            self.assertIn("--check-runtime-paths", wrapper_calls)
+            self.assertIn("scripts/hpc/bootstrap_resources.py --require-sources --require-checkpoints", wrapper_calls)
+            self.assertIn("scripts/benchmark/yolov3.py resume-plan", wrapper_calls)
+            self.assertIn("--fold 1", wrapper_calls)
+            self.assertNotIn("bootstrap_cedia.sh", wrapper_calls)
+            self.assertNotIn("prepare_isic2018", wrapper_calls)
+
     def test_bootstrap_verifies_avit_runtime_after_model_setup(self):
         bootstrap = (HPC_ROOT / "bootstrap_inside_container.sh").read_text(encoding="utf-8")
         setup_index = bootstrap.index('python "scripts/$setup_script"')

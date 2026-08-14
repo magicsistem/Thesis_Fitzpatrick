@@ -55,7 +55,7 @@ echo "host=$(hostname) utc=$(date -u +%FT%TZ) python=$python_bin git_head=$(git 
 echo "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-unset}"
 command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi || true
 
-python3 - "$TRAIN_MANIFEST" "$FOLDS_FILE" "$P0_ROOT/oof_manifest.json" <<'PY'
+"$PROJECT_ROOT/scripts/hpc/run_in_container.sh" --cpu -- python - "$TRAIN_MANIFEST" "$FOLDS_FILE" "$P0_ROOT/oof_manifest.json" <<'PY'
 import json, pathlib, sys
 
 manifest_path, folds_path, p0_manifest_path = map(pathlib.Path, sys.argv[1:])

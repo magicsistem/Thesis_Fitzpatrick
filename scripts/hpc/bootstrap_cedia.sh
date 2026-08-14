@@ -34,7 +34,7 @@ echo "sif=$SIF_PATH expected_sha256=$expected_sha present=$([[ -f "$SIF_PATH" ]]
 echo "mode=$MODE persistent_venv=$PROJECT_ROOT/.cedia/venv"
 echo "One container invocation will perform the complete stage."
 if ((EXECUTE == 0)); then
-    python3 "$SCRIPT_DIR/bootstrap_resources.py" --clone-sources
+    echo "Source and checkpoint identities will be checked by Python inside the SIF during --execute."
     echo "DRY RUN: no directories, packages, downloads, sources, or weights changed."
     exit 0
 fi
@@ -48,9 +48,6 @@ available_bytes=$(df -PB1 "$PROJECT_ROOT" | awk 'NR==2 {print $4}')
 required_bytes=$((5 * 1024 * 1024 * 1024))
 ((available_bytes >= required_bytes)) || { echo "At least 5 GiB free is required for dependencies, sources and checkpoint archives" >&2; exit 2; }
 echo "bootstrap_free_gib=$((available_bytes / 1024 / 1024 / 1024)) required_gib=5"
-
-# Source checkouts do not require the container and remain resumable/persistent.
-python3 "$SCRIPT_DIR/bootstrap_resources.py" --clone-sources --execute
 
 exec "$SCRIPT_DIR/run_in_container.sh" --no-venv -- \
     bash "$SCRIPT_DIR/bootstrap_inside_container.sh" "$MODE"

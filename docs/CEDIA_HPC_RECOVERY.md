@@ -67,8 +67,11 @@ export DARKNET_GPU_CONFIRMED=YES
    ```
 
    Crea y verifica los temporales exactos del job local, revisa recursos ya
-   presentes y emite el fingerprint del checkpoint compatible. Deténgase si
-   no muestra `resume_weights_path`; entonces no se debe iniciar Darknet.
+   presentes y emite el fingerprint del checkpoint compatible. Sus dos
+   comprobaciones Python se ejecutan mediante `run_in_container.sh` dentro de
+   la SIF (nunca con el `python3` del nodo login); no llama bootstrap ni
+   preparación de datos. Deténgase si no muestra `resume_weights_path`;
+   entonces no se debe iniciar Darknet.
    Use `sbatch scripts/hpc/preflight_pipeline_cedia.slurm` sólo si esa puerta
    revela que faltan artefactos o si cambió el contrato.
 2. Tras la puerta ligera, reanude **un solo fold que tenga checkpoint**, por

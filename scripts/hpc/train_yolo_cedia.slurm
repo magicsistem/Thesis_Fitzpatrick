@@ -23,7 +23,6 @@ FOLDS_FILE=${FOLDS_FILE:-$DATA_ROOT/manifests/isic2018_task1_train_disjoint_fold
 YOLO_ROOT=${YOLO_ROOT:-$PROJECT_ROOT/results/benchmark_v1/yolo}
 DARKNET_BIN=${DARKNET_BIN:-$PROJECT_ROOT/models/yolov3-darknet/source/darknet}
 INITIAL_WEIGHTS=${INITIAL_WEIGHTS:-$PROJECT_ROOT/models/yolov3-darknet/checkpoints/darknet53.conv.74}
-PYTHON_BIN=${PYTHON_BIN:-python3}
 FOLD=${SLURM_ARRAY_TASK_ID:?This template must run as an array task}
 FOLD_DIR=$YOLO_ROOT/fold-$FOLD
 MAX_ATTEMPTS=${YOLO_MAX_ATTEMPTS:-2}
@@ -44,7 +43,7 @@ echo "job=${SLURM_JOB_ID:-unset} array_job=${SLURM_ARRAY_JOB_ID:-manual} task=$F
 echo "host=$(hostname) utc=$(date -u +%FT%TZ) git_head=$(git rev-parse HEAD) max_attempts=$MAX_ATTEMPTS"
 command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi || true
 
-python3 - "$TRAIN_MANIFEST" "$FOLDS_FILE" "$FOLD" <<'PY'
+scripts/hpc/run_in_container.sh --cpu -- python - "$TRAIN_MANIFEST" "$FOLDS_FILE" "$FOLD" <<'PY'
 import json, sys
 manifest, folds_path, fold = sys.argv[1], sys.argv[2], int(sys.argv[3])
 with open(manifest, encoding="utf-8") as stream: payload = json.load(stream)
@@ -71,7 +70,7 @@ export DATA_ROOT SIF_PATH
 for attempt in $(seq 1 "$MAX_ATTEMPTS"); do
     echo "yolo_attempt=$attempt/$MAX_ATTEMPTS utc=$(date -u +%FT%TZ)"
     runtime_diag_start "$PROJECT_ROOT/.cedia/diagnostics/yolo-${SLURM_JOB_ID:-manual}-fold-$FOLD-attempt-$attempt.log"
-    setsid "$PROJECT_ROOT/scripts/hpc/run_in_container.sh" -- "$PYTHON_BIN" scripts/benchmark/yolov3.py train \
+    setsid "$PROJECT_ROOT/scripts/hpc/run_in_container.sh" -- python scripts/benchmark/yolov3.py train \
         --darknet "$DARKNET_BIN" --data "$FOLD_DIR/lesion.data" --cfg "$FOLD_DIR/lesion-yolov3.cfg" \
         --initial-weights "$INITIAL_WEIGHTS" --fold "$FOLD" --output "$FOLD_DIR/training" --confirm-training &
     child=$!; child_pgid=$child

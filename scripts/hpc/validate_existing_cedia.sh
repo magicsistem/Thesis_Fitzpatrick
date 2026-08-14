@@ -12,7 +12,10 @@ DARKNET_BIN=${DARKNET_BIN:-$PROJECT_ROOT/models/yolov3-darknet/source/darknet}
 INITIAL_WEIGHTS=${INITIAL_WEIGHTS:-$PROJECT_ROOT/models/yolov3-darknet/checkpoints/darknet53.conv.74}
 cd "$PROJECT_ROOT"
 scripts/hpc/run_in_container.sh --check-runtime-paths
-python3 scripts/hpc/bootstrap_resources.py --require-sources --require-checkpoints
+# Project Python must never run on the login-node interpreter: CEDIA's host
+# Python is older than this repository's supported syntax.  This is a
+# read-only resource contract check, not bootstrap or dataset preparation.
+scripts/hpc/run_in_container.sh --cpu -- python scripts/hpc/bootstrap_resources.py --require-sources --require-checkpoints
 scripts/hpc/run_in_container.sh --cpu -- python scripts/benchmark/yolov3.py resume-plan \
   --darknet "$DARKNET_BIN" --data "$YOLO_ROOT/fold-$FOLD/lesion.data" --cfg "$YOLO_ROOT/fold-$FOLD/lesion-yolov3.cfg" \
   --initial-weights "$INITIAL_WEIGHTS" --fold "$FOLD" --output "$YOLO_ROOT/fold-$FOLD/training"

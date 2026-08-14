@@ -35,7 +35,7 @@ RUN_ROOT=$ARTIFACT_ROOT/runs/$RUN_ID
 for path in "$PROJECT_ROOT" "$DATA_ROOT" "$DEVELOPMENT_MANIFEST" "$BENCHMARK_CONFIG" "$PROJECT_ROOT/.cedia/venv/bin/python"; do
     [[ -e "$path" ]] || { echo "Missing prerequisite: $path" >&2; exit 2; }
 done
-python3 - "$DEVELOPMENT_MANIFEST" <<'PY'
+scripts/hpc/run_in_container.sh --cpu -- python - "$DEVELOPMENT_MANIFEST" <<'PY'
 import json, pathlib, sys
 p = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
 if p.get("split") == "test": raise SystemExit("Full development benchmark refuses sealed test")
@@ -43,10 +43,20 @@ if not p.get("items"): raise SystemExit("Development manifest is empty")
 print(f"validated dataset={p.get('dataset_id')} split={p.get('split')} images={len(p['items'])}")
 PY
 if [[ -f "$RUN_ROOT/run_manifest.json" ]]; then
-    state=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["status"])' "$RUN_ROOT/run_manifest.json")
-    [[ "$state" == completed ]] && { echo "Run already completed and will not be repeated: $RUN_ID"; exit 0; }
-    echo "Incomplete run exists at $RUN_ROOT; inspect it before choosing a new RUN_PREFIX" >&2
-    exit 2
+    if scripts/hpc/run_in_container.sh --cpu -- python - "$RUN_ROOT/run_manifest.json" <<'PY'
+import json, pathlib, sys
+status = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")).get("status")
+sys.exit(0 if status == "completed" else 3)
+PY
+    then
+        echo "Run already completed and will not be repeated: $RUN_ID"
+        exit 0
+    else
+        state_rc=$?
+        [[ "$state_rc" == 3 ]] || { echo "Cannot validate existing run manifest: $RUN_ROOT/run_manifest.json" >&2; exit "$state_rc"; }
+        echo "Incomplete run exists at $RUN_ROOT; inspect it before choosing a new RUN_PREFIX" >&2
+        exit 2
+    fi
 fi
 
 echo "job=$SLURM_JOB_ID task=$TASK stage=$STAGE host=$(hostname) utc=$(date -u +%FT%TZ) git=$(git -C "$PROJECT_ROOT" rev-parse HEAD)"

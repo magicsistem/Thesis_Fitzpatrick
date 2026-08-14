@@ -25,6 +25,7 @@ print("Core SIF packages were preserved.")
 PY
 
 if [[ "$MODE" == models ]]; then
+    python scripts/hpc/bootstrap_resources.py --clone-sources --execute
     python scripts/hpc/bootstrap_resources.py --require-sources
     setup_scripts=(
         setup_avit_model.py setup_ultralight_vm_unet.py setup_ba_transformer.py
