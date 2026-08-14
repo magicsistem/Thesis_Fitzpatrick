@@ -145,8 +145,8 @@ def _b2_methods(methods: list[dict[str, Any]], path: Path | None) -> tuple[list[
     if path is None:
         raise ValueError("No disponible: faltan checkpoints B2; proporcione --b2-config con checkpoints realmente reentrenados")
     config = load_json(path)
-    if config.get("evaluation") != "B2" or config.get("frozen") is not True:
-        raise ValueError("--b2-config debe declarar evaluation=B2 y frozen=true")
+    if config.get("schema_version") != 2 or config.get("evaluation") != "B2" or config.get("frozen") is not True:
+        raise ValueError("--b2-config debe declarar schema_version=2, evaluation=B2 y frozen=true")
     identities = config.get("b2_checkpoints", {})
     expected = {method["method_id"] for method in methods if method["kind"] == "neural"}
     if set(identities) != expected:
@@ -171,7 +171,8 @@ def _b2_methods(methods: list[dict[str, Any]], path: Path | None) -> tuple[list[
             if not metadata.is_file() or (member.get("metadata_sha256") and sha256_file(metadata) != member["metadata_sha256"]):
                 raise ValueError(f"Falta identidad de entrenamiento B2 o su hash cambió: {metadata}")
             metadata_payload = load_json(metadata)
-            if metadata_payload.get("protocol") != "B2" or metadata_payload.get("method_id") != method["method_id"] or metadata_payload.get("checkpoint_sha256") != member["sha256"]:
+            contract = metadata_payload.get("training_contract", {})
+            if metadata_payload.get("schema_version") != 2 or metadata_payload.get("status") != "completed" or metadata_payload.get("protocol") != "B2" or metadata_payload.get("method_id") != method["method_id"] or metadata_payload.get("checkpoint_sha256") != member["sha256"] or contract.get("method_id") != method["method_id"] or contract.get("fold") != member.get("fold"):
                 raise ValueError(f"Identidad de entrenamiento B2 incompatible: {metadata}")
             member_folds.add(metadata_payload.get("fold"))
             command = list(method["adapter_command"])
@@ -485,6 +486,8 @@ def main() -> None:
                 print(f"[{completed}/{summary['executions']}] {method['method_id']} {image.image_id} · ETA {eta:.1f}s", flush=True)
         _write_csv(run_directory / "metrics_per_image.csv", metrics_rows)
         _write_csv(run_directory / "failures.csv", failures)
+        if failures:
+            raise RuntimeError(f"Benchmark incompleto: {len(failures)} ejecuciones de backend fallaron")
         manifest["status"] = "completed"
         manifest["completed_utc"] = datetime.now(timezone.utc).isoformat()
         manifest["failures"] = failures

@@ -186,6 +186,8 @@ def main() -> None:
                     completed += 1
                     eta = (time.perf_counter() - started) / completed * (summary["executions"] - completed)
                     print(f"[{completed}/{summary['executions']}] {condition} {method['method_id']} {image.image_id} · ETA {eta:.1f}s", flush=True)
+        if manifest["failures"]:
+            raise RuntimeError(f"Ablación incompleta: {len(manifest['failures'])} ejecuciones de backend fallaron")
         manifest["status"] = "completed"
         manifest["completed_utc"] = datetime.now(timezone.utc).isoformat()
         write_report(run_directory, repetitions=config["metrics"]["bootstrap_repetitions"], seed=config["seed"])

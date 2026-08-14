@@ -20,6 +20,7 @@ for fold in 0 1 2 3 4; do
         --folds "$FOLDS_FILE" --fold "$fold" --output "$fold_dir" --seed 20260806
     python scripts/benchmark/yolov3.py configure \
         --source-cfg "$SOURCE_CFG" --output "$fold_dir/lesion-yolov3.cfg"
+    mkdir -p "$fold_dir/backup" "$fold_dir/training"
 done
 
 echo "Prepared five YOLO folds under $YOLO_ROOT"

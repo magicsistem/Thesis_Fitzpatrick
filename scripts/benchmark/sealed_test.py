@@ -131,8 +131,8 @@ def main() -> None:
         if completed.returncode: raise SystemExit(completed.returncode)
         print(json.dumps({"status": "sealed", "run_id": run_id}, indent=2)); return
     config = load_json(args.config)
-    if config.get("schema_version") != 1 or config.get("evaluation") != "B2":
-        raise SystemExit("La configuración sellada debe declarar schema_version=1 y evaluation=B2.")
+    if config.get("schema_version") != 2 or config.get("evaluation") != "B2":
+        raise SystemExit("La configuración sellada debe declarar schema_version=2 y evaluation=B2.")
     if config.get("frozen") is not True:
         raise SystemExit("Configuración no congelada: frozen debe ser true después de completar y validar B2.")
     status = subprocess.run(["git", "status", "--porcelain"], cwd=REPO_ROOT, check=True, capture_output=True, text=True).stdout
@@ -161,7 +161,8 @@ def main() -> None:
             if not metadata_path.is_file() or sha256_file(metadata_path) != member.get("metadata_sha256"):
                 raise SystemExit(f"Metadatos B2 ausentes o modificados para {method_id}: {metadata_path}")
             metadata = load_json(metadata_path)
-            if metadata.get("protocol") != "B2" or metadata.get("method_id") != method_id or metadata.get("checkpoint_sha256") != actual:
+            contract = metadata.get("training_contract", {})
+            if metadata.get("schema_version") != 2 or metadata.get("status") != "completed" or metadata.get("protocol") != "B2" or metadata.get("method_id") != method_id or metadata.get("checkpoint_sha256") != actual or contract.get("method_id") != method_id or contract.get("fold") != member.get("fold"):
                 raise SystemExit(f"Metadatos B2 incompatibles para {method_id}: {metadata_path}")
             audited_members.append({"path": member["path"], "resolved_path": str(path.resolve()), "sha256": actual, "metadata_path": member["metadata_path"], "resolved_metadata_path": str(metadata_path.resolve()), "metadata_sha256": member["metadata_sha256"]})
         checkpoint_audit[method_id] = {"aggregation": identity.get("aggregation", "single"), "members": audited_members}

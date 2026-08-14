@@ -57,10 +57,10 @@ echo "host=$(hostname) utc=$(date -u +%FT%TZ) python=$python_bin git_head=$(git 
 echo "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-unset}"
 command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi || true
 
-python3 - "$TRAIN_MANIFEST" "$FOLDS_FILE" "$YOLO_FROZEN_ROOT" "$P0_ROOT/oof_manifest.json" <<'PY'
-import hashlib, json, pathlib, sys
+python3 - "$TRAIN_MANIFEST" "$FOLDS_FILE" "$P0_ROOT/oof_manifest.json" <<'PY'
+import json, pathlib, sys
 
-manifest_path, folds_path, frozen_root, p0_manifest_path = map(pathlib.Path, sys.argv[1:])
+manifest_path, folds_path, p0_manifest_path = map(pathlib.Path, sys.argv[1:])
 manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 folds = json.loads(folds_path.read_text(encoding="utf-8"))
 if manifest.get("split") != "train": raise SystemExit("B2 requires split=train; sealed test is forbidden")
@@ -68,19 +68,9 @@ if len(folds.get("folds", [])) != 5: raise SystemExit("B2 requires exactly five 
 if json.loads(p0_manifest_path.read_text(encoding="utf-8")).get("status") != "completed": raise SystemExit("B2 requires completed leakage-safe OOF P0")
 for fold in folds["folds"]:
     if set(fold["train_ids"]) & set(fold["validation_ids"]): raise SystemExit("Fold leakage detected")
-for index in range(5):
-    path = frozen_root / f"fold-{index}" / "frozen.json"
-    if not path.is_file(): raise SystemExit(f"Missing frozen YOLO manifest: {path}")
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    if payload.get("status") != "frozen" or not payload.get("identity_hash"):
-        raise SystemExit(f"YOLO fold is not frozen: {path}")
-    for name in ("cfg", "weights"):
-        artifact = pathlib.Path(payload[f"{name}_path"])
-        if not artifact.is_file(): raise SystemExit(f"Missing frozen {name}: {artifact}")
-        digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
-        if digest != payload[f"{name}_sha256"]: raise SystemExit(f"Modified frozen {name}: {artifact}")
 print("validated train-only folds and five frozen YOLO detectors")
 PY
+"$PROJECT_ROOT/scripts/hpc/run_in_container.sh" -- "$python_bin" scripts/benchmark/yolov3.py validate-folds --root "$YOLO_FROZEN_ROOT"
 
 resume=()
 [[ ! -f "$OUTPUT/training_state.pt" ]] || resume=(--resume)

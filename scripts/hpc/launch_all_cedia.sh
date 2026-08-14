@@ -3,7 +3,13 @@
 set -Eeuo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
-PROJECT_ROOT_CANDIDATE=${PROJECT_ROOT:-${SLURM_SUBMIT_DIR:-$SCRIPT_DIR/../..}}
+PROJECT_ROOT_CANDIDATE=${PROJECT_ROOT:-}
+if [[ -z "$PROJECT_ROOT_CANDIDATE" && -d "$SCRIPT_DIR/../../.git" ]]; then
+    PROJECT_ROOT_CANDIDATE=$SCRIPT_DIR/../..
+elif [[ -z "$PROJECT_ROOT_CANDIDATE" && -n "${SLURM_SUBMIT_DIR:-}" && "$SLURM_SUBMIT_DIR" != /var/spool/slurm* ]]; then
+    PROJECT_ROOT_CANDIDATE=$SLURM_SUBMIT_DIR
+fi
+[[ -n "$PROJECT_ROOT_CANDIDATE" ]] || { echo "PROJECT_ROOT is required when Slurm executes the launcher from /var/spool/slurm" >&2; exit 2; }
 PROJECT_ROOT=$(cd -- "$PROJECT_ROOT_CANDIDATE" && pwd -P)
 
 DATA_ROOT=${DATA_ROOT:-$PROJECT_ROOT/data/raw/isic2018_task1}
@@ -14,7 +20,7 @@ DEVELOPMENT_MANIFEST="$MANIFEST_ROOT/isic2018_task1_validation_disjoint.json"
 FOLDS_FILE="$MANIFEST_ROOT/isic2018_task1_train_disjoint_folds_5.json"
 YOLO_FROZEN_ROOT=${YOLO_FROZEN_ROOT:-$PROJECT_ROOT/results/benchmark_v1/yolo}
 BENCHMARK_CONFIG=${BENCHMARK_CONFIG:-$PROJECT_ROOT/.cedia/benchmark.cedia.json}
-PIPELINE_BRANCH=${PIPELINE_BRANCH:-agent/isic2018-disjoint-pipeline}
+PIPELINE_BRANCH=${PIPELINE_BRANCH:-fix/hpc-pipeline-validation}
 JOB_FILE="$PROJECT_ROOT/.cedia/cedia_job_chain_$(date +%Y%m%d_%H%M%S).txt"
 CURRENT_STAGE=initialization
 
@@ -88,7 +94,7 @@ YOLO_JOB=$(submit YOLO_JOB --dependency="afterok:$SMOKE_JOB" scripts/hpc/train_y
 FINALIZE_YOLO_JOB=$(submit FINALIZE_YOLO_JOB --dependency="afterok:$YOLO_JOB" scripts/hpc/finalize_yolo_cedia.slurm)
 P0_JOB=$(submit P0_JOB --dependency="afterok:$FINALIZE_YOLO_JOB" scripts/hpc/prepare_p0_oof_cedia.slurm)
 B2_JOB=$(submit B2_JOB --dependency="afterok:$P0_JOB" scripts/hpc/train_b2_cedia.slurm)
-CONFIG_JOB=$(submit CONFIG_JOB --dependency="afterok:$FINALIZE_YOLO_JOB" --job-name=thesis-config --partition=gpu --nodes=1 --ntasks=1 --cpus-per-task=32 --mem=60G --gres=gpu:a100-sxm4-40gb:1 --time=00:20:00 --output=slurm-thesis-config-%j.out --error=slurm-thesis-config-%j.err --wrap='cd "$PROJECT_ROOT" && python3 scripts/hpc/configure_benchmark_cedia.py --frozen-yolo "$YOLO_FROZEN_ROOT/fold-0/frozen.json"')
+CONFIG_JOB=$(submit CONFIG_JOB --dependency="afterok:$FINALIZE_YOLO_JOB" --job-name=thesis-config --partition=gpu --nodes=1 --ntasks=1 --cpus-per-task=32 --mem=60G --gres=gpu:a100-sxm4-40gb:1 --time=00:20:00 --output=slurm-thesis-config-%j.out --error=slurm-thesis-config-%j.err --wrap='cd "$PROJECT_ROOT" && "$PROJECT_ROOT/scripts/hpc/run_in_container.sh" -- python scripts/hpc/configure_benchmark_cedia.py --frozen-yolo-root "$YOLO_FROZEN_ROOT"')
 BENCHMARK_JOB=$(submit BENCHMARK_JOB --dependency="afterok:$CONFIG_JOB" scripts/hpc/run_benchmark_cedia.slurm)
 B2_FINAL_JOB=$(submit B2_FINAL_JOB --dependency="afterok:$B2_JOB:$CONFIG_JOB" scripts/hpc/finalize_b2_cedia.slurm)
 
@@ -96,3 +102,4 @@ trap - ERR
 echo "Submitted leakage-safe pipeline from $GIT_HEAD"
 echo "Job registry: $JOB_FILE"
 squeue -u "$USER"
+exit 0

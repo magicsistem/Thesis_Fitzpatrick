@@ -8,6 +8,8 @@ import os
 from pathlib import Path
 import random
 import re
+import stat
+import struct
 import subprocess
 from typing import Any
 
@@ -52,6 +54,7 @@ def prepare_darknet_fold(manifest: dict[str, Any], data_root: Path, fold: dict[s
         raise ValueError("fuga: un ID aparece en training y validation")
     by_id = {item["image_id"]: item for item in manifest["items"]}
     output.mkdir(parents=True, exist_ok=True)
+    (output / "backup").mkdir(parents=True, exist_ok=True)
     rng = random.Random(seed)
     lists: dict[str, list[str]] = {"train": [], "validation": []}
     failures = []
@@ -116,23 +119,245 @@ def patch_yolov3_cfg(source: Path, destination: Path, *, batch: int = 64, subdiv
     atomic_write_bytes(destination, text.encode())
 
 
-def run_darknet_training(darknet: Path, data_file: Path, cfg: Path, initial_weights: Path, output: Path, *, resume_weights: Path | None = None) -> dict[str, Any]:
-    for path in (darknet, data_file, cfg, resume_weights or initial_weights):
-        if not path.is_file():
-            raise FileNotFoundError(path)
+def _cfg_integer(path: Path, name: str) -> int:
+    match = re.search(rf"(?m)^{re.escape(name)}\s*=\s*(\d+)\s*$", path.read_text(encoding="utf-8"))
+    if not match:
+        raise ValueError(f"La configuración Darknet no declara {name}: {path}")
+    return int(match.group(1))
+
+
+def _darknet_data(path: Path) -> dict[str, str]:
+    values = {}
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        if "=" in raw and not raw.lstrip().startswith("#"):
+            key, value = raw.split("=", 1)
+            values[key.strip()] = value.strip()
+    return values
+
+
+def validate_darknet_data(path: Path, fold: int) -> Path:
+    values = _darknet_data(path)
+    missing = {"classes", "train", "valid", "names", "backup"} - set(values)
+    if missing:
+        raise ValueError(f"lesion.data incompleto; faltan {sorted(missing)}")
+    if values["classes"] != "1":
+        raise ValueError("lesion.data debe declarar exactamente una clase")
+    for name in ("train", "valid", "names"):
+        artifact = Path(values[name])
+        if not artifact.is_absolute() or not artifact.is_file():
+            raise ValueError(f"La ruta {name} de lesion.data debe ser absoluta y existir: {artifact}")
+    backup = Path(values["backup"])
+    if not backup.is_absolute():
+        raise ValueError("La ruta backup de lesion.data debe ser absoluta")
+    expected = path.resolve().parent / "backup"
+    if backup.resolve() != expected.resolve() or path.resolve().parent.name != f"fold-{fold}":
+        raise ValueError(f"La ruta backup no corresponde al fold {fold}: {backup}")
+    backup.mkdir(parents=True, exist_ok=True)
+    if not backup.is_dir() or not os.access(backup, os.W_OK | os.X_OK):
+        raise PermissionError(f"El directorio backup no existe o no es escribible: {backup}")
+    return backup
+
+
+def _regular_nonempty(path: Path) -> None:
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        raise FileNotFoundError(path) from None
+    if not stat.S_ISREG(info.st_mode) or info.st_size <= 0:
+        raise ValueError(f"Se esperaba un archivo regular no vacío: {path}")
+
+
+def darknet_weights_iteration(path: Path, batch: int) -> int:
+    """Read Darknet's header and return the completed batch count."""
+    _regular_nonempty(path)
+    with path.open("rb") as stream:
+        header = stream.read(20)
+    if len(header) < 16:
+        raise ValueError(f"Checkpoint Darknet truncado: {path}")
+    major, minor, _revision = struct.unpack("<3i", header[:12])
+    seen_size = 8 if major * 10 + minor >= 2 and major < 1000 and minor < 1000 else 4
+    if len(header) < 12 + seen_size:
+        raise ValueError(f"Cabecera Darknet truncada: {path}")
+    seen = struct.unpack("<Q" if seen_size == 8 else "<I", header[12:12 + seen_size])[0]
+    if batch <= 0 or seen % batch:
+        raise ValueError(f"Checkpoint Darknet tiene contador incompatible con batch={batch}: {path}")
+    return seen // batch
+
+
+def _git_commit(path: Path) -> str | None:
+    completed = subprocess.run(["git", "-C", str(path), "rev-parse", "HEAD"], check=False, capture_output=True, text=True)
+    return completed.stdout.strip() if completed.returncode == 0 else None
+
+
+def _training_contract(darknet: Path, data_file: Path, cfg: Path, initial_weights: Path, fold: int) -> dict[str, Any]:
+    data_artifacts = {name: {"path": str(Path(value).resolve()), "sha256": sha256_file(Path(value))} for name, value in _darknet_data(data_file).items() if name in {"train", "valid", "names"}}
+    return {
+        "fold": fold,
+        "darknet_path": str(darknet.resolve()),
+        "darknet_sha256": sha256_file(darknet),
+        "data_path": str(data_file.resolve()),
+        "data_sha256": sha256_file(data_file),
+        "data_artifacts": data_artifacts,
+        "cfg_path": str(cfg.resolve()),
+        "cfg_sha256": sha256_file(cfg),
+        "initial_weights_path": str(initial_weights.resolve()),
+        "initial_weights_sha256": sha256_file(initial_weights),
+        "max_batches": _cfg_integer(cfg, "max_batches"),
+        "batch": _cfg_integer(cfg, "batch"),
+        "git_commit": _git_commit(Path(__file__).resolve().parents[2]),
+    }
+
+
+def _log_iteration(log: Path) -> int:
+    iterations = [int(value) for value in re.findall(r"(?m)^(\d+):", log.read_text(encoding="utf-8", errors="replace"))]
+    return max(iterations, default=0)
+
+
+def validate_completed_training(state_path: Path, *, expected_fold: int | None = None) -> dict[str, Any]:
+    state = load_json(state_path)
+    contract = state.get("contract", {})
+    fold = contract.get("fold")
+    if state.get("schema_version") != 2 or state.get("status") != "completed" or not isinstance(fold, int):
+        raise ValueError(f"Estado YOLO no completado o antiguo: {state_path}")
+    if expected_fold is not None and fold != expected_fold:
+        raise ValueError(f"Estado YOLO pertenece al fold {fold}, no al {expected_fold}")
+    for name in ("darknet", "data", "cfg", "initial_weights"):
+        artifact = Path(contract[f"{name}_path"])
+        _regular_nonempty(artifact)
+        if sha256_file(artifact) != contract[f"{name}_sha256"]:
+            raise ValueError(f"Artefacto de entrenamiento YOLO modificado: {artifact}")
+    for item in contract.get("data_artifacts", {}).values():
+        artifact = Path(item["path"])
+        _regular_nonempty(artifact)
+        if sha256_file(artifact) != item["sha256"]:
+            raise ValueError(f"Lista/nombres Darknet modificados: {artifact}")
+    log = Path(state["log_path"])
+    _regular_nonempty(log)
+    text = log.read_text(encoding="utf-8", errors="replace")
+    if re.search(r"Couldn't open file|cannot open file|fatal error", text, re.IGNORECASE):
+        raise ValueError(f"El log Darknet contiene un error fatal: {log}")
+    max_batches, batch = int(contract["max_batches"]), int(contract["batch"])
+    if _log_iteration(log) < max_batches or int(state.get("observed_iteration", 0)) < max_batches:
+        raise ValueError(f"Darknet no alcanzó max_batches={max_batches}")
+    final_weights = Path(state["final_weights_path"])
+    if final_weights.name != Path(contract["cfg_path"]).stem + "_final.weights":
+        raise ValueError(f"Nombre de pesos finales inesperado: {final_weights}")
+    if final_weights.parent.resolve() != validate_darknet_data(Path(contract["data_path"]), fold).resolve():
+        raise ValueError("Los pesos finales no pertenecen al backup del fold")
+    if darknet_weights_iteration(final_weights, batch) < max_batches:
+        raise ValueError("Los pesos finales corresponden a un entrenamiento incompleto")
+    if sha256_file(final_weights) != state.get("final_weights_sha256"):
+        raise ValueError("El hash de los pesos finales cambió")
+    return state
+
+
+def _resume_checkpoint(path: Path, backup: Path, cfg: Path, contract: dict[str, Any]) -> int:
+    if path.parent.resolve() != backup.resolve():
+        raise ValueError(f"Checkpoint fuera del backup del fold: {path}")
+    allowed = re.fullmatch(rf"{re.escape(cfg.stem)}_(\d+)\.weights", path.name) or path.name == f"{cfg.stem}.backup"
+    if not allowed:
+        raise ValueError(f"Nombre de checkpoint no reanudable: {path.name}")
+    iteration = darknet_weights_iteration(path, int(contract["batch"]))
+    if not 0 < iteration < int(contract["max_batches"]):
+        raise ValueError(f"Iteración de checkpoint no reanudable: {iteration}")
+    return iteration
+
+
+def _automatic_resume(backup: Path, cfg: Path, contract: dict[str, Any], old_state: dict[str, Any] | None) -> Path | None:
+    candidates = [
+        path for path in backup.iterdir()
+        if path.is_file() and (path.name == f"{cfg.stem}.backup" or re.fullmatch(rf"{re.escape(cfg.stem)}_\d+\.weights", path.name))
+    ]
+    if not candidates:
+        return None
+    if not old_state or old_state.get("contract") != contract:
+        raise ValueError("Hay checkpoints, pero falta un contrato de entrenamiento compatible")
+    valid = []
+    for path in candidates:
+        try:
+            valid.append((_resume_checkpoint(path, backup, cfg, contract), path))
+        except ValueError:
+            continue
+    if not valid:
+        raise ValueError("No existe un checkpoint reanudable válido para este fold/configuración")
+    return max(valid, key=lambda item: item[0])[1]
+
+
+def run_darknet_training(darknet: Path, data_file: Path, cfg: Path, initial_weights: Path, output: Path, *, fold: int, resume_weights: Path | None = None) -> dict[str, Any]:
+    for path in (darknet, data_file, cfg, initial_weights):
+        _regular_nonempty(path)
+    backup = validate_darknet_data(data_file, fold)
     output.mkdir(parents=True, exist_ok=True)
+    state_path, log = output / "training_state.json", output / "darknet.log"
+    contract = _training_contract(darknet, data_file, cfg, initial_weights, fold)
+    old_state = load_json(state_path) if state_path.is_file() else None
+    if resume_weights is None and old_state and old_state.get("status") == "completed" and old_state.get("contract") == contract:
+        try:
+            return {**validate_completed_training(state_path, expected_fold=fold), "reused": True}
+        except (KeyError, OSError, ValueError):
+            pass
+    resume_weights = resume_weights or _automatic_resume(backup, cfg, contract, old_state)
+    if resume_weights:
+        if not old_state or old_state.get("contract") != contract:
+            raise ValueError("La reanudación no coincide con el contrato del fold/configuración")
+        resume_iteration = _resume_checkpoint(resume_weights, backup, cfg, contract)
+    else:
+        resume_iteration = 0
+    final_weights = backup / f"{cfg.stem}_final.weights"
+    if final_weights.exists():
+        raise ValueError(f"Existen pesos finales sin un estado completed válido; limpie el fold antes de entrenar: {final_weights}")
     weights = resume_weights or initial_weights
     command = [str(darknet), "detector", "train", str(data_file), str(cfg), str(weights), "-dont_show", "-map"]
-    state = {"schema_version": 1, "status": "running", "started_utc": datetime.now(timezone.utc).isoformat(), "command": command, "resume": resume_weights is not None, "cfg_sha256": sha256_file(cfg), "initial_weights_sha256": sha256_file(weights)}
-    atomic_write_json(output / "training_state.json", state)
-    log = output / "darknet.log"
-    with log.open("ab") as stream:
+    state = {
+        "schema_version": 2, "status": "running", "started_utc": datetime.now(timezone.utc).isoformat(),
+        "command": command, "contract": contract, "resume": resume_weights is not None,
+        "resume_weights_path": str(resume_weights.resolve()) if resume_weights else None,
+        "resume_weights_sha256": sha256_file(resume_weights) if resume_weights else None,
+        "resume_iteration": resume_iteration, "log_path": str(log.resolve()),
+    }
+    atomic_write_json(state_path, state)
+    with log.open("wb") as stream:
         completed = subprocess.run(command, stdout=stream, stderr=subprocess.STDOUT, check=False)
-    state.update({"status": "completed" if completed.returncode == 0 else "failed", "returncode": completed.returncode, "finished_utc": datetime.now(timezone.utc).isoformat()})
-    atomic_write_json(output / "training_state.json", state)
-    if completed.returncode:
-        raise RuntimeError(f"Darknet terminó con código {completed.returncode}; revise {log}")
-    return state
+    state.update({"returncode": completed.returncode, "observed_iteration": _log_iteration(log), "finished_utc": datetime.now(timezone.utc).isoformat()})
+    try:
+        if completed.returncode:
+            raise RuntimeError(f"Darknet terminó con código {completed.returncode}")
+        text = log.read_text(encoding="utf-8", errors="replace")
+        if re.search(r"Couldn't open file|cannot open file|fatal error", text, re.IGNORECASE):
+            raise RuntimeError("Darknet informó un error fatal en el log")
+        if state["observed_iteration"] < contract["max_batches"]:
+            raise RuntimeError(f"Darknet terminó en {state['observed_iteration']} de {contract['max_batches']} iteraciones")
+        if darknet_weights_iteration(final_weights, contract["batch"]) < contract["max_batches"]:
+            raise RuntimeError("Los pesos finales no alcanzaron max_batches")
+        state.update({"status": "completed", "final_weights_path": str(final_weights.resolve()), "final_weights_bytes": final_weights.stat().st_size, "final_weights_sha256": sha256_file(final_weights)})
+        atomic_write_json(state_path, state)
+        validate_completed_training(state_path, expected_fold=fold)
+        return state
+    except (KeyError, OSError, ValueError, RuntimeError) as exc:
+        state.update({"status": "failed", "error": f"{type(exc).__name__}: {exc}"})
+        atomic_write_json(state_path, state)
+        raise RuntimeError(f"Entrenamiento YOLO inválido; revise {log}: {exc}") from exc
+
+
+def validate_frozen_yolo(path: Path, expected_fold: int) -> dict[str, Any]:
+    payload = load_json(path)
+    identity = payload.pop("identity_hash", None)
+    if payload.get("status") != "frozen" or payload.get("architecture") != "YOLOv3-Darknet53" or payload.get("fold") != expected_fold or content_hash(payload) != identity:
+        raise ValueError(f"Manifest YOLO congelado inválido para fold {expected_fold}: {path}")
+    payload["identity_hash"] = identity
+    for name in ("cfg", "weights", "training_state", "validation_report"):
+        artifact = Path(payload[f"{name}_path"])
+        _regular_nonempty(artifact)
+        if sha256_file(artifact) != payload[f"{name}_sha256"]:
+            raise ValueError(f"Artefacto YOLO congelado modificado: {artifact}")
+    state = validate_completed_training(Path(payload["training_state_path"]), expected_fold=expected_fold)
+    if state["final_weights_sha256"] != payload["weights_sha256"]:
+        raise ValueError(f"Peso congelado no coincide con el entrenamiento del fold {expected_fold}")
+    return payload
+
+
+def validate_frozen_yolo_set(root: Path) -> list[dict[str, Any]]:
+    return [validate_frozen_yolo(root / f"fold-{fold}" / "frozen.json", fold) for fold in range(5)]
 
 
 def box_iou(first: BBox, second: BBox) -> float:
@@ -195,7 +420,7 @@ def collect_raw_validation_detections(cfg: Path, weights: Path, manifest: dict[s
     return records
 
 
-def freeze_detector(cfg: Path, weights: Path, thresholds: dict[str, float], output: Path, validation_report: Path) -> dict[str, Any]:
+def freeze_detector(cfg: Path, weights: Path, thresholds: dict[str, float], output: Path, validation_report: Path, *, fold: int, training_state: Path) -> dict[str, Any]:
     if not validation_report.is_file():
         raise FileNotFoundError("Falta informe de selección en validación")
     for key in ("confidence_threshold", "nms_threshold", "margin_fraction"):
@@ -205,7 +430,10 @@ def freeze_detector(cfg: Path, weights: Path, thresholds: dict[str, float], outp
     selected = validation.get("selected", {})
     if any(float(selected.get(key, -1)) != float(value) for key, value in thresholds.items()):
         raise ValueError("Los umbrales a congelar no coinciden con la selección del informe de validación")
-    payload = {"schema_version": 1, "status": "frozen", "architecture": "YOLOv3-Darknet53", "cfg_path": str(cfg), "cfg_sha256": sha256_file(cfg), "weights_path": str(weights), "weights_sha256": sha256_file(weights), "thresholds": thresholds, "validation_report_sha256": sha256_file(validation_report), "frozen_utc": datetime.now(timezone.utc).isoformat()}
+    state = validate_completed_training(training_state, expected_fold=fold)
+    if Path(state["final_weights_path"]).resolve() != weights.resolve() or state["final_weights_sha256"] != sha256_file(weights) or Path(state["contract"]["cfg_path"]).resolve() != cfg.resolve() or state["contract"]["cfg_sha256"] != sha256_file(cfg):
+        raise ValueError("La configuración/pesos a congelar no son los artefactos finales validados del fold")
+    payload = {"schema_version": 2, "status": "frozen", "architecture": "YOLOv3-Darknet53", "fold": fold, "cfg_path": str(cfg.resolve()), "cfg_sha256": sha256_file(cfg), "weights_path": str(weights.resolve()), "weights_sha256": sha256_file(weights), "training_state_path": str(training_state.resolve()), "training_state_sha256": sha256_file(training_state), "validation_report_path": str(validation_report.resolve()), "validation_report_sha256": sha256_file(validation_report), "max_batches": state["contract"]["max_batches"], "observed_iteration": state["observed_iteration"], "thresholds": thresholds, "frozen_utc": datetime.now(timezone.utc).isoformat()}
     payload["identity_hash"] = content_hash(payload)
     atomic_write_json(output, payload)
     return payload

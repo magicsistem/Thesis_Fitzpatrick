@@ -197,8 +197,8 @@ export PROJECT_ROOT="$HOME/Thesis_Fitzpatrick"
 export DATA_ROOT="$PROJECT_ROOT/data/raw/isic2018_task1"
 export SIF_PATH="$HOME/pytorch_24.01-py3.sif"
 export DEVELOPMENT_MANIFEST="$DATA_ROOT/manifests/isic2018_task1_validation.json"
-python3 scripts/hpc/configure_benchmark_cedia.py \
-  --frozen-yolo "$PROJECT_ROOT/results/benchmark_v1/yolo/fold-0/frozen.json"
+scripts/hpc/run_in_container.sh -- python scripts/hpc/configure_benchmark_cedia.py \
+  --frozen-yolo-root "$PROJECT_ROOT/results/benchmark_v1/yolo"
 export BENCHMARK_CONFIG="$PROJECT_ROOT/.cedia/benchmark.cedia.json"
 sbatch scripts/hpc/run_benchmark_cedia.slurm
 ```

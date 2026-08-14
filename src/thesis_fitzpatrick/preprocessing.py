@@ -196,8 +196,13 @@ def detector_from_config(config: dict[str, Any], root: Path) -> Detector:
         frozen_path = Path(frozen_value)
         if not frozen_path.is_absolute(): frozen_path = root / frozen_path
         frozen = load_json(frozen_path)
-        if frozen.get("status") != "frozen" or frozen.get("architecture") != "YOLOv3-Darknet53":
+        identity = frozen.pop("identity_hash", None)
+        if frozen.get("schema_version") != 2 or frozen.get("status") != "frozen" or frozen.get("architecture") != "YOLOv3-Darknet53" or not isinstance(frozen.get("fold"), int) or content_hash(frozen) != identity:
             raise ValueError("El manifest YOLO no está congelado o no corresponde a YOLOv3-Darknet53")
+        frozen["identity_hash"] = identity
+        training_state = Path(frozen.get("training_state_path", ""))
+        if not training_state.is_file() or sha256_file(training_state) != frozen.get("training_state_sha256"):
+            raise ValueError("El estado de entrenamiento YOLO congelado falta o fue modificado")
         cfg_value, weights_value = frozen.get("cfg_path"), frozen.get("weights_path")
         thresholds = frozen.get("thresholds", {})
         yolo = {**yolo, "cfg_path": cfg_value, "weights_path": weights_value, "confidence_threshold": thresholds.get("confidence_threshold"), "nms_threshold": thresholds.get("nms_threshold")}

@@ -37,7 +37,7 @@ for path in "$PROJECT_ROOT" "$DATA_ROOT" "$SIF_PATH" "$TRAIN_MANIFEST" "$FOLDS_F
 done
 [[ ! -e "$FOLD_DIR/frozen.json" ]] || { echo "Fold $FOLD is already frozen; refusing to retrain" >&2; exit 2; }
 
-mkdir -p "$FOLD_DIR/training" "$YOLO_ROOT/logs"
+mkdir -p "$FOLD_DIR/backup" "$FOLD_DIR/training" "$YOLO_ROOT/logs"
 log=$YOLO_ROOT/logs/yolo-${SLURM_ARRAY_JOB_ID:-manual}-$FOLD.log
 exec > >(tee -a "$log") 2>&1
 echo "job=${SLURM_JOB_ID:-unset} array_job=${SLURM_ARRAY_JOB_ID:-unset} task=$FOLD fold=$FOLD"
@@ -60,9 +60,6 @@ resume_args=()
 if [[ -n "${RESUME_WEIGHTS:-}" ]]; then
     [[ -f "$RESUME_WEIGHTS" ]] || { echo "RESUME_WEIGHTS does not exist" >&2; exit 2; }
     resume_args=(--resume "$RESUME_WEIGHTS")
-elif [[ -d "$FOLD_DIR/backup" ]]; then
-    latest=$(find "$FOLD_DIR/backup" -maxdepth 1 -type f -name '*.weights' -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -n 1 | cut -d' ' -f2- || true)
-    [[ -z "$latest" ]] || resume_args=(--resume "$latest")
 fi
 
 child=""
@@ -77,7 +74,7 @@ export DATA_ROOT SIF_PATH
 "$PROJECT_ROOT/scripts/hpc/run_in_container.sh" -- "$PYTHON_BIN" scripts/benchmark/yolov3.py train \
     --darknet "$DARKNET_BIN" --data "$FOLD_DIR/lesion.data" \
     --cfg "$FOLD_DIR/lesion-yolov3.cfg" --initial-weights "$INITIAL_WEIGHTS" \
-    --output "$FOLD_DIR/training" "${resume_args[@]}" --confirm-training &
+    --fold "$FOLD" --output "$FOLD_DIR/training" "${resume_args[@]}" --confirm-training &
 child=$!
 set +e; wait "$child"; rc=$?; set -e
 echo "finished fold=$FOLD returncode=$rc utc=$(date -u +%FT%TZ)"

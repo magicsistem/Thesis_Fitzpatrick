@@ -18,6 +18,7 @@ trap 'rc=$?; echo "benchmark failed rc=$rc line=$LINENO utc=$(date -u +%FT%TZ)" 
 : "${PROJECT_ROOT:?Export PROJECT_ROOT before sbatch}"
 : "${DATA_ROOT:?Export DATA_ROOT before sbatch}"
 : "${DEVELOPMENT_MANIFEST:?Export the complete non-test development manifest}"
+: "${YOLO_FROZEN_ROOT:?Export the five-fold frozen YOLO root}"
 PROJECT_ROOT=$(realpath "$PROJECT_ROOT")
 DATA_ROOT=$(realpath "$DATA_ROOT")
 DEVELOPMENT_MANIFEST=$(realpath "$DEVELOPMENT_MANIFEST")
@@ -55,6 +56,7 @@ echo "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-unset} warmup=$WARMUP repetit
 nvidia-smi
 export DATA_ROOT SIF_PATH=${SIF_PATH:-$HOME/pytorch_24.01-py3.sif} THESIS_DEVICE=cuda
 cd "$PROJECT_ROOT"
+scripts/hpc/run_in_container.sh -- python scripts/benchmark/yolov3.py validate-folds --root "$YOLO_FROZEN_ROOT"
 if [[ "$STAGE" == A || "$STAGE" == B1 ]]; then
     command=(python scripts/benchmark/run_evaluation.py --evaluation "$STAGE" --dataset isic2018_task1 --split validation
         --models all --manifest "$DEVELOPMENT_MANIFEST" --data-root "$DATA_ROOT" --config "$BENCHMARK_CONFIG"

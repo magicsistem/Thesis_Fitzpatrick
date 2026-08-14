@@ -11,18 +11,18 @@ import sys
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 from thesis_fitzpatrick.benchmark import atomic_write_json, load_json  # noqa: E402
-from thesis_fitzpatrick.yolo import collect_raw_validation_detections, freeze_detector, select_validation_configuration  # noqa: E402
+from thesis_fitzpatrick.yolo import collect_raw_validation_detections, freeze_detector, select_validation_configuration, validate_completed_training  # noqa: E402
 
 
 def choose_weights(fold_root: Path, explicit: Path | None) -> Path:
     if explicit:
         if not explicit.is_file(): raise FileNotFoundError(explicit)
         return explicit
-    candidates = sorted((fold_root / "backup").glob("*_best.weights"))
-    if not candidates: candidates = sorted((fold_root / "backup").glob("*_final.weights"))
-    if len(candidates) != 1:
-        raise ValueError(f"Expected exactly one best/final Darknet checkpoint in {fold_root / 'backup'}; found {len(candidates)}")
-    return candidates[0]
+    state = validate_completed_training(fold_root / "training" / "training_state.json")
+    candidate = Path(state["final_weights_path"])
+    if not candidate.is_file():
+        raise ValueError(f"Missing validated final Darknet checkpoint: {candidate}")
+    return candidate
 
 
 def main() -> None:
@@ -35,6 +35,8 @@ def main() -> None:
     if manifest.get("split") != "train": raise SystemExit("YOLO finalization accepts only grouped training folds, never test")
     fold = next((item for item in folds.get("folds", []) if item.get("fold") == args.fold), None)
     if fold is None: raise SystemExit("Unknown fold")
+    state_path = args.fold_root / "training" / "training_state.json"
+    validate_completed_training(state_path, expected_fold=args.fold)
     cfg = args.fold_root / "lesion-yolov3.cfg"; weights = choose_weights(args.fold_root, args.weights)
     raw_path = args.fold_root / "raw_validation.json"; report_path = args.fold_root / "validation.json"
     records = collect_raw_validation_detections(cfg, weights, manifest, args.data_root, set(fold["validation_ids"]))
@@ -46,7 +48,7 @@ def main() -> None:
         "confidence_threshold": selected["confidence_threshold"],
         "nms_threshold": selected["nms_threshold"],
         "margin_fraction": selected["margin_fraction"],
-    }, args.fold_root / "frozen.json", report_path)
+    }, args.fold_root / "frozen.json", report_path, fold=args.fold, training_state=state_path)
     print(json.dumps({"fold": args.fold, "validation_records": len(records), "selected": selected, "frozen": frozen}, indent=2))
 
 

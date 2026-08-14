@@ -8,8 +8,10 @@ from datetime import datetime, timezone
 import importlib.util
 import inspect
 import json
+import os
 from pathlib import Path
 import random
+import subprocess
 import sys
 
 import numpy as np
@@ -74,7 +76,9 @@ def save_inference_checkpoint(torch, model, module_name: str, output: Path) -> N
     if module_name.endswith("avit"): payload = {"model_weights": state}
     elif module_name.endswith("unixio_isic2018"): payload = {"model_state": state}
     else: payload = state
-    torch.save(payload, output)
+    temporary = output.with_suffix(output.suffix + ".tmp")
+    torch.save(payload, temporary)
+    os.replace(temporary, output)
 
 
 def main() -> None:
@@ -94,6 +98,29 @@ def main() -> None:
     if manifest.get("split") != "train": raise SystemExit("B2 solo entrena desde split=train")
     fold = next((value for value in folds["folds"] if value["fold"] == args.fold), None)
     if fold is None: raise SystemExit("Fold inexistente")
+    p0_manifest_path = args.p0_root / "oof_manifest.json"
+    p0_manifest = load_json(p0_manifest_path)
+    if p0_manifest.get("status") != "completed" or p0_manifest.get("source_manifest_sha256") != sha256_file(args.manifest) or p0_manifest.get("folds_sha256") != sha256_file(args.folds):
+        raise SystemExit("El manifest P0 OOF no corresponde al manifest/folds de este entrenamiento B2")
+    _script, configured_values = arguments_from_command(method)
+    native_checkpoint = Path(configured_values["checkpoint"])
+    contract = {
+        "method_id": method["method_id"], "backend_id": method["backend_id"], "fold": args.fold,
+        "epochs": args.epochs, "learning_rate": args.learning_rate, "seed": args.seed,
+        "source_manifest_sha256": sha256_file(args.manifest), "folds_sha256": sha256_file(args.folds),
+        "p0_manifest_sha256": sha256_file(p0_manifest_path), "parent_native_checkpoint_sha256": sha256_file(native_checkpoint),
+        "git_commit": subprocess.run(["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, check=True, capture_output=True, text=True).stdout.strip(),
+    }
+    args.output.mkdir(parents=True, exist_ok=True)
+    state_path = args.output / "training_state.pt"
+    checkpoint = args.output / f"{method['method_id']}.fold{args.fold}.b2.pt"
+    metadata_path = checkpoint.with_suffix(checkpoint.suffix + ".metadata.json")
+    if checkpoint.is_file() and metadata_path.is_file():
+        metadata = load_json(metadata_path)
+        if metadata.get("status") == "completed" and metadata.get("training_contract") == contract and metadata.get("checkpoint_sha256") == sha256_file(checkpoint):
+            print(json.dumps({**metadata, "reused": True}, indent=2)); return
+    if state_path.exists() and not args.resume:
+        raise SystemExit("Existe training_state.pt; solicite --resume para validarlo, no se sobrescribirá")
     by_id = {item["image_id"]: item for item in manifest["items"]}
     def collect(ids):
         collected = []
@@ -112,14 +139,16 @@ def main() -> None:
     torch.manual_seed(args.seed)
     if args.device == "cuda": torch.cuda.manual_seed_all(args.seed)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate)
-    args.output.mkdir(parents=True, exist_ok=True)
-    state_path = args.output / "training_state.pt"; start_epoch = 0; best_validation_loss = float("inf"); best_epoch = None
+    start_epoch = 0; best_validation_loss = float("inf"); best_epoch = None
     if args.resume:
         if not state_path.is_file(): raise SystemExit("--resume solicitado, pero training_state.pt no existe")
         state = torch.load(state_path, map_location=args.device)
+        if state.get("schema_version") != 2 or state.get("training_contract") != contract:
+            raise SystemExit("training_state.pt no pertenece a este método/fold/configuración")
+        if not 0 <= int(state.get("epoch", -1)) < args.epochs:
+            raise SystemExit("training_state.pt contiene una época inválida")
         model.load_state_dict(state["model"]); optimizer.load_state_dict(state["optimizer"]); start_epoch = int(state["epoch"]) + 1; best_validation_loss = float(state.get("best_validation_loss", best_validation_loss)); best_epoch = state.get("best_epoch")
     history = list(state.get("history", [])) if args.resume else []
-    checkpoint = args.output / f"{method['method_id']}.fold{args.fold}.b2.pt"
 
     def tensors(image_path, mask_path):
         with Image.open(image_path) as opened: values_np = preprocess(module, ImageOps.exif_transpose(opened).convert("RGB"), values)
@@ -158,9 +187,11 @@ def main() -> None:
         history.append({"epoch": epoch, "training_loss": float(np.mean(losses)), "validation_loss": validation_loss, "training_samples": len(losses), "validation_samples": len(validation_losses)})
         if validation_loss < best_validation_loss:
             best_validation_loss, best_epoch = validation_loss, epoch; save_inference_checkpoint(torch, model, module.__name__, checkpoint)
-        torch.save({"epoch": epoch, "model": model.state_dict(), "optimizer": optimizer.state_dict(), "history": history, "best_validation_loss": best_validation_loss, "best_epoch": best_epoch}, state_path)
+        state_tmp = state_path.with_suffix(state_path.suffix + ".tmp")
+        torch.save({"schema_version": 2, "training_contract": contract, "epoch": epoch, "model": model.state_dict(), "optimizer": optimizer.state_dict(), "history": history, "best_validation_loss": best_validation_loss, "best_epoch": best_epoch}, state_tmp)
+        os.replace(state_tmp, state_path)
         atomic_write_json(args.output / "training_history.json", history)
-    metadata = {"schema_version": 1, "protocol": "B2", "backend_id": method["backend_id"], "method_id": method["method_id"], "fold": args.fold, "seed": args.seed, "epochs": args.epochs, "learning_rate": args.learning_rate, "device": args.device, "best_epoch": best_epoch, "best_validation_loss": best_validation_loss, "augmentations": ["horizontal_flip_p0.5", "vertical_flip_p0.5"], "checkpoint_sha256": sha256_file(checkpoint), "parent_native_checkpoint_sha256": sha256_file(Path(values["checkpoint"])), "source_manifest": str(args.manifest), "source_manifest_sha256": sha256_file(args.manifest), "folds": str(args.folds), "folds_sha256": sha256_file(args.folds), "p0_root": str(args.p0_root), "p0_cache_keys": sorted(path.parent.name for _, path, _ in samples + validation_samples), "completed_utc": datetime.now(timezone.utc).isoformat(), "parameter_count": sum(parameter.numel() for parameter in model.parameters())}
+    metadata = {"schema_version": 2, "status": "completed", "protocol": "B2", "backend_id": method["backend_id"], "method_id": method["method_id"], "fold": args.fold, "seed": args.seed, "epochs": args.epochs, "learning_rate": args.learning_rate, "device": args.device, "best_epoch": best_epoch, "best_validation_loss": best_validation_loss, "augmentations": ["horizontal_flip_p0.5", "vertical_flip_p0.5"], "checkpoint_sha256": sha256_file(checkpoint), "parent_native_checkpoint_sha256": sha256_file(Path(values["checkpoint"])), "source_manifest": str(args.manifest), "source_manifest_sha256": sha256_file(args.manifest), "folds": str(args.folds), "folds_sha256": sha256_file(args.folds), "p0_root": str(args.p0_root), "p0_cache_keys": sorted(path.parent.name for _, path, _ in samples + validation_samples), "training_contract": contract, "completed_epochs": len(history), "completed_utc": datetime.now(timezone.utc).isoformat(), "parameter_count": sum(parameter.numel() for parameter in model.parameters())}
     atomic_write_json(checkpoint.with_suffix(checkpoint.suffix + ".metadata.json"), metadata)
     print(json.dumps(metadata, indent=2))
 

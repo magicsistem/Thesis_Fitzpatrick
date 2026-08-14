@@ -7,6 +7,7 @@ import sys
 import tempfile
 import unittest
 import subprocess
+import struct
 
 import cv2
 import numpy as np
@@ -21,13 +22,96 @@ from thesis_fitzpatrick.annotations import export_consensus_manifest, initialize
 from thesis_fitzpatrick.benchmark import atomic_write_json
 from thesis_fitzpatrick.datasets import OFFICIAL_IMAPP_FILES, audit_manifest_overlap, build_isic2018_manifest, build_novice_manifest, download_resumable, file_digest, import_imapp_metadata, majority_consensus, staple_consensus, verify_manifest_files
 from thesis_fitzpatrick.reporting import aggregate, paired_comparisons, write_report
-from thesis_fitzpatrick.yolo import bbox_from_mask, bbox_to_darknet, darknet_to_bbox, patch_yolov3_cfg, prepare_darknet_fold, select_validation_configuration
+from thesis_fitzpatrick.yolo import bbox_from_mask, bbox_to_darknet, darknet_to_bbox, patch_yolov3_cfg, prepare_darknet_fold, run_darknet_training, select_validation_configuration, validate_completed_training
 from thesis_fitzpatrick.benchmark import content_hash, sha256_file
 import sealed_test
 from setup_yolov3_darknet import cpu_build_command, gpu_build_command
 
 
 class DatasetAndYoloTests(unittest.TestCase):
+    def _darknet_training_files(self, root: Path, *, fold: int = 0):
+        fold_root = root / f"fold-{fold}"; fold_root.mkdir()
+        for name in ("train.txt", "validation.txt", "lesion.names"):
+            (fold_root / name).write_text("x\n", encoding="utf-8")
+        data = fold_root / "lesion.data"
+        data.write_text(
+            f"classes = 1\ntrain = {(fold_root / 'train.txt').resolve()}\nvalid = {(fold_root / 'validation.txt').resolve()}\n"
+            f"names = {(fold_root / 'lesion.names').resolve()}\nbackup = {(fold_root / 'backup').resolve()}\n",
+            encoding="utf-8",
+        )
+        cfg = fold_root / "lesion-yolov3.cfg"; cfg.write_text("[net]\nbatch=64\nmax_batches=6000\n", encoding="utf-8")
+        initial = root / "darknet53.conv.74"; initial.write_bytes(b"initial")
+        darknet = root / "darknet"; darknet.write_text(
+            "#!/usr/bin/env python3\nimport pathlib, struct, sys\n"
+            "if pathlib.Path(sys.argv[0] + '.success').exists():\n"
+            " data = {k.strip(): v.strip() for k, v in (line.split('=', 1) for line in pathlib.Path(sys.argv[3]).read_text().splitlines())}\n"
+            " out = pathlib.Path(data['backup']) / 'lesion-yolov3_final.weights'\n"
+            " out.write_bytes(struct.pack('<3iQ', 0, 2, 0, 6000 * 64) + b'weights')\n print('6000: 1, 1 avg')\n"
+            "else:\n print('100: 1, 1 avg')\n raise SystemExit(1)\n",
+            encoding="utf-8",
+        ); darknet.chmod(0o755)
+        return fold_root, darknet, data, cfg, initial
+
+    @staticmethod
+    def _weights(path: Path, iteration: int, batch: int = 64):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(struct.pack("<3iQ", 0, 2, 0, iteration * batch) + b"weights")
+
+    def test_darknet_backup_is_created_before_training(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); fold, darknet, data, cfg, initial = self._darknet_training_files(root)
+            with self.assertRaises(RuntimeError): run_darknet_training(darknet, data, cfg, initial, fold / "training", fold=0)
+            self.assertTrue((fold / "backup").is_dir())
+
+    def test_darknet_zero_without_weights_is_failed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); fold, darknet, data, cfg, initial = self._darknet_training_files(root)
+            darknet.write_text("#!/bin/sh\necho '6000: 1, 1 avg'\n", encoding="utf-8"); darknet.chmod(0o755)
+            with self.assertRaisesRegex(RuntimeError, "pesos|weights|No such file"):
+                run_darknet_training(darknet, data, cfg, initial, fold / "training", fold=0)
+            self.assertEqual(json.loads((fold / "training/training_state.json").read_text())["status"], "failed")
+
+    def test_darknet_log_error_overrides_zero_and_final_weight(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); fold, darknet, data, cfg, initial = self._darknet_training_files(root)
+            darknet.write_text("#!/usr/bin/env python3\nimport pathlib,struct,sys\nd={k.strip():v.strip() for k,v in (x.split('=',1) for x in pathlib.Path(sys.argv[3]).read_text().splitlines())}; pathlib.Path(d['backup'],'lesion-yolov3_final.weights').write_bytes(struct.pack('<3iQ',0,2,0,6000*64)+b'w'); print('6000: 1, 1 avg'); print(\"Couldn't open file: x\")\n", encoding="utf-8"); darknet.chmod(0o755)
+            with self.assertRaisesRegex(RuntimeError, "error fatal"):
+                run_darknet_training(darknet, data, cfg, initial, fold / "training", fold=0)
+
+    def test_darknet_early_exit_and_bad_weight_are_failed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); fold, darknet, data, cfg, initial = self._darknet_training_files(root)
+            darknet.write_text("#!/bin/sh\necho '100: 1, 1 avg'\n", encoding="utf-8"); darknet.chmod(0o755)
+            with self.assertRaisesRegex(RuntimeError, "100 de 6000"):
+                run_darknet_training(darknet, data, cfg, initial, fold / "training", fold=0)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); fold, darknet, data, cfg, initial = self._darknet_training_files(root)
+            darknet.write_text("#!/usr/bin/env python3\nimport pathlib,sys\nd={k.strip():v.strip() for k,v in (x.split('=',1) for x in pathlib.Path(sys.argv[3]).read_text().splitlines())}; pathlib.Path(d['backup'],'lesion-yolov3_final.weights').touch(); print('6000: 1, 1 avg')\n", encoding="utf-8"); darknet.chmod(0o755)
+            with self.assertRaisesRegex(RuntimeError, "regular no vacío"):
+                run_darknet_training(darknet, data, cfg, initial, fold / "training", fold=0)
+
+    def test_obsolete_completed_state_is_not_reused(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); fold, darknet, data, cfg, initial = self._darknet_training_files(root)
+            output = fold / "training"; output.mkdir(); atomic_write_json(output / "training_state.json", {"schema_version": 1, "status": "completed"})
+            Path(str(darknet) + ".success").touch()
+            state = run_darknet_training(darknet, data, cfg, initial, output, fold=0)
+            self.assertEqual(state["schema_version"], 2); self.assertNotIn("reused", state)
+            self.assertEqual(validate_completed_training(output / "training_state.json", expected_fold=0)["observed_iteration"], 6000)
+
+    def test_darknet_resume_requires_matching_contract_and_checkpoint(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); fold, darknet, data, cfg, initial = self._darknet_training_files(root)
+            output = fold / "training"
+            with self.assertRaises(RuntimeError): run_darknet_training(darknet, data, cfg, initial, output, fold=0)
+            checkpoint = fold / "backup/lesion-yolov3_100.weights"; self._weights(checkpoint, 100)
+            Path(str(darknet) + ".success").touch()
+            state = run_darknet_training(darknet, data, cfg, initial, output, fold=0)
+            self.assertTrue(state["resume"]); self.assertEqual(state["resume_iteration"], 100)
+            foreign = root / "foreign.weights"; self._weights(foreign, 100)
+            with self.assertRaisesRegex(ValueError, "contrato|fuera"):
+                run_darknet_training(darknet, data, cfg, initial, output, fold=0, resume_weights=foreign)
+
     def test_isic_import_never_mixes_official_splits(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -28,6 +28,19 @@ def main() -> None:
     args = parser.parse_args(); manifest, folds, base_config = load_json(args.manifest), load_json(args.folds), load_json(args.config)
     validate_dataset_manifest(manifest, data_root=args.data_root, require_files=True)
     if manifest.get("split") != "train": raise SystemExit("OOF P0 accepts only split=train; sealed test is forbidden")
+    completion_path = args.artifact_root / "oof_manifest.json"
+    if completion_path.is_file():
+        previous = load_json(completion_path)
+        expected_yolo = [
+            {"fold": fold, "path": str(args.yolo_root / f"fold-{fold}" / "frozen.json"), "sha256": sha256_file(args.yolo_root / f"fold-{fold}" / "frozen.json")}
+            for fold in range(5)
+        ]
+        valid = previous.get("status") == "completed" and previous.get("failures") == [] and previous.get("images") == len(manifest["items"]) and previous.get("folds") == 5
+        valid = valid and previous.get("source_manifest_sha256") == sha256_file(args.manifest) and previous.get("folds_sha256") == sha256_file(args.folds) and previous.get("yolo_frozen_manifests") == expected_yolo
+        valid = valid and all(len(list(args.artifact_root.glob(f"*/{item['image_id']}/*/preprocessing_manifest.json"))) == 1 for item in manifest["items"])
+        if not valid:
+            raise SystemExit(f"OOF P0 existente pero incompleto o incompatible: {completion_path}")
+        print(json.dumps({**previous, "reused": True}, indent=2)); return
     if not args.confirm_run: raise SystemExit(f"OOF P0 would process {len(manifest['items'])} images; repeat with --confirm-run")
     by_id = {item["image_id"]: item for item in manifest["items"]}; seen = set(); failures = []
     for fold in folds.get("folds", []):
@@ -53,7 +66,7 @@ def main() -> None:
             for fold in range(5)
         ],
     }
-    atomic_write_json(args.artifact_root / "oof_manifest.json", completion)
+    atomic_write_json(completion_path, completion)
     print(json.dumps(completion, indent=2))
     if failures: raise SystemExit(2)
 

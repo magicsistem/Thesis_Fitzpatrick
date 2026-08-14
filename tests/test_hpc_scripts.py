@@ -138,6 +138,45 @@ class HPCScriptTests(unittest.TestCase):
         missing = sorted(name for name in names if not (REPO_ROOT / name).is_file())
         self.assertEqual(missing, [])
 
+    def test_launcher_dependency_graph_uses_afterok_for_every_edge(self):
+        launcher = (HPC_ROOT / "launch_all_cedia.sh").read_text(encoding="utf-8")
+        expected = {
+            "YOLO_JOB": 'afterok:$SMOKE_JOB',
+            "FINALIZE_YOLO_JOB": 'afterok:$YOLO_JOB',
+            "P0_JOB": 'afterok:$FINALIZE_YOLO_JOB',
+            "B2_JOB": 'afterok:$P0_JOB',
+            "CONFIG_JOB": 'afterok:$FINALIZE_YOLO_JOB',
+            "BENCHMARK_JOB": 'afterok:$CONFIG_JOB',
+            "B2_FINAL_JOB": 'afterok:$B2_JOB:$CONFIG_JOB',
+        }
+        for variable, dependency in expected.items():
+            self.assertRegex(launcher, rf"{variable}=\$\(submit {variable} --dependency=\"{re.escape(dependency)}\"")
+
+    def test_launcher_resolves_explicit_project_from_spooled_working_directory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            spool = Path(directory) / "var/spool/slurm"; spool.mkdir(parents=True)
+            completed = subprocess.run(
+                ["bash", str(HPC_ROOT / "launch_all_cedia.sh")], cwd=spool,
+                env={**os.environ, "PROJECT_ROOT": str(REPO_ROOT), "PIPELINE_BRANCH": "deliberately-wrong"},
+                check=False, capture_output=True, text=True,
+            )
+        self.assertEqual(completed.returncode, 2)
+        self.assertIn("Expected branch deliberately-wrong", completed.stderr)
+        self.assertNotIn("/var/spool/slurm/.cedia", completed.stderr)
+
+    def test_launcher_exits_after_submission_and_does_not_wait(self):
+        launcher = (HPC_ROOT / "launch_all_cedia.sh").read_text(encoding="utf-8")
+        self.assertRegex(launcher, r'squeue -u "\$USER"\s+exit 0\s*$')
+        self.assertNotRegex(launcher, r"\b(?:wait|sleep|tail\s+-f)\b")
+
+    def test_yolo_slurm_delegates_checkpoint_validation_to_python(self):
+        training = (HPC_ROOT / "train_yolo_cedia.slurm").read_text(encoding="utf-8")
+        self.assertIn('mkdir -p "$FOLD_DIR/backup"', training)
+        self.assertIn('--fold "$FOLD"', training)
+        self.assertNotIn("find \"$FOLD_DIR/backup\"", training)
+        for name in ("prepare_p0_oof_cedia.slurm", "train_b2_cedia.slurm", "run_benchmark_cedia.slurm"):
+            self.assertIn("yolov3.py validate-folds", (HPC_ROOT / name).read_text(encoding="utf-8"), name)
+
 
 if __name__ == "__main__":
     unittest.main()
