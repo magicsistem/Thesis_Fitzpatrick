@@ -12,7 +12,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from thesis_fitzpatrick.benchmark import atomic_write_json, load_json  # noqa: E402
-from thesis_fitzpatrick.yolo import collect_raw_validation_detections, freeze_detector, patch_yolov3_cfg, prepare_darknet_fold, run_darknet_training, select_validation_configuration, validate_frozen_yolo, validate_frozen_yolo_set  # noqa: E402
+from thesis_fitzpatrick.yolo import DarknetInterrupted, collect_raw_validation_detections, freeze_detector, patch_yolov3_cfg, prepare_darknet_fold, run_darknet_training, select_validation_configuration, validate_frozen_yolo, validate_frozen_yolo_set  # noqa: E402
 
 
 def parse_args() -> argparse.Namespace:
@@ -63,7 +63,11 @@ def main() -> None:
     elif args.action == "train":
         if not args.confirm_training:
             raise SystemExit("Entrenamiento largo bloqueado. Revise recursos/comando y repita con --confirm-training.")
-        print(json.dumps(run_darknet_training(args.darknet, args.data, args.cfg, args.initial_weights, args.output, fold=args.fold, resume_weights=args.resume), indent=2))
+        try:
+            print(json.dumps(run_darknet_training(args.darknet, args.data, args.cfg, args.initial_weights, args.output, fold=args.fold, resume_weights=args.resume), indent=2))
+        except DarknetInterrupted as exc:
+            print(f"YOLO interrupted and checkpoint inventory was recorded: {exc}", file=sys.stderr)
+            raise SystemExit(75) from exc
     elif args.action == "validate":
         records = json.loads(args.predictions.read_text(encoding="utf-8"))
         report = select_validation_configuration(records, *[[float(value) for value in getattr(args, name).split(",")] for name in ("confidence_candidates", "nms_candidates", "margin_candidates")])

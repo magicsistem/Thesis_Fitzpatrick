@@ -192,7 +192,7 @@ def main() -> None:
         manifest["completed_utc"] = datetime.now(timezone.utc).isoformat()
         write_report(run_directory, repetitions=config["metrics"]["bootstrap_repetitions"], seed=config["seed"])
     except BaseException as exc:
-        manifest["status"] = "failed"
+        manifest["status"] = "interrupted" if isinstance(exc, KeyboardInterrupt) else "failed"
         manifest["fatal_error"] = f"{type(exc).__name__}: {exc}"
         raise
     finally:

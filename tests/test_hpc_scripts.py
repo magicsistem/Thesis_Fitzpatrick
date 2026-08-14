@@ -7,6 +7,7 @@ import subprocess
 import tempfile
 import unittest
 import json
+import time
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -141,6 +142,7 @@ class HPCScriptTests(unittest.TestCase):
     def test_launcher_dependency_graph_uses_afterok_for_every_edge(self):
         launcher = (HPC_ROOT / "launch_all_cedia.sh").read_text(encoding="utf-8")
         expected = {
+            "SMOKE_JOB": 'afterok:$PREFLIGHT_JOB',
             "YOLO_JOB": 'afterok:$SMOKE_JOB',
             "FINALIZE_YOLO_JOB": 'afterok:$YOLO_JOB',
             "P0_JOB": 'afterok:$FINALIZE_YOLO_JOB',
@@ -166,8 +168,38 @@ class HPCScriptTests(unittest.TestCase):
 
     def test_launcher_exits_after_submission_and_does_not_wait(self):
         launcher = (HPC_ROOT / "launch_all_cedia.sh").read_text(encoding="utf-8")
-        self.assertRegex(launcher, r'squeue -u "\$USER"\s+exit 0\s*$')
-        self.assertNotRegex(launcher, r"\b(?:wait|sleep|tail\s+-f)\b")
+        self.assertTrue(launcher.rstrip().endswith("exit 0"))
+        self.assertNotIn("squeue -u", launcher)
+        self.assertNotIn("tee", launcher)
+        self.assertNotRegex(launcher, r"\b(?:sbatch\s+--wait|wait|sleep|tail\s+-f)\b")
+
+    def test_launcher_submits_quickly_atomically_without_surviving_helpers(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "project"; hpc = root / "scripts/hpc"; hpc.mkdir(parents=True)
+            target = hpc / "launch_all_cedia.sh"; target.write_text((HPC_ROOT / "launch_all_cedia.sh").read_text(encoding="utf-8"), encoding="utf-8"); target.chmod(0o755)
+            fake = Path(directory) / "bin"; fake.mkdir(); calls = Path(directory) / "sbatch.calls"
+            (fake / "git").write_text("#!/bin/sh\ncase \"$*\" in *'--abbrev-ref HEAD'*) echo fix/hpc-pipeline-validation;; *'status --porcelain'*) :;; *'rev-parse HEAD'*) echo deadbeef;; *'merge-base'*) exit 0;; esac\n", encoding="utf-8")
+            (fake / "sbatch").write_text(f"#!/bin/sh\nprintf '%s\\n' \"$*\" >> {calls}\nprintf '23%s;cluster\\n' \"$(wc -l < {calls})\"\n", encoding="utf-8")
+            for executable in fake.iterdir(): executable.chmod(0o755)
+            started = time.monotonic()
+            completed = subprocess.run(["bash", str(target)], cwd=Path(directory), env={**os.environ, "PROJECT_ROOT": str(root), "PATH": f"{fake}:{os.environ['PATH']}", "HOME": directory}, check=False, capture_output=True, text=True, timeout=10)
+            elapsed = time.monotonic() - started
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertLess(elapsed, 2.0)
+            self.assertEqual(len(calls.read_text(encoding="utf-8").splitlines()), 9)
+            registry = next((root / ".cedia").glob("cedia_job_chain_*.txt"))
+            self.assertIn("status=submitted", registry.read_text(encoding="utf-8"))
+            self.assertFalse(list((root / ".cedia").glob(".cedia_job_chain.*")))
+
+    def test_runtime_monitor_stops_without_retaining_a_child_or_tee(self):
+        helper = HPC_ROOT / "runtime_diagnostics.sh"
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory); log = project / "diagnostics.log"
+            command = f'PROJECT_ROOT="{project}"; source "{helper}"; runtime_diag_start "{log}" 1; pid=$RUNTIME_DIAGNOSTICS_PID; runtime_diag_stop; kill -0 "$pid" 2>/dev/null && exit 9 || exit 0'
+            completed = subprocess.run(["bash", "-c", command], check=False, capture_output=True, text=True, timeout=10)
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertIn("label=start", log.read_text(encoding="utf-8"))
+        self.assertNotIn("\ntee ", helper.read_text(encoding="utf-8"))
 
     def test_yolo_slurm_delegates_checkpoint_validation_to_python(self):
         training = (HPC_ROOT / "train_yolo_cedia.slurm").read_text(encoding="utf-8")

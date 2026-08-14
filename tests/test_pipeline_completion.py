@@ -96,8 +96,37 @@ class DatasetAndYoloTests(unittest.TestCase):
             output = fold / "training"; output.mkdir(); atomic_write_json(output / "training_state.json", {"schema_version": 1, "status": "completed"})
             Path(str(darknet) + ".success").touch()
             state = run_darknet_training(darknet, data, cfg, initial, output, fold=0)
-            self.assertEqual(state["schema_version"], 2); self.assertNotIn("reused", state)
+            self.assertEqual(state["schema_version"], 3); self.assertNotIn("reused", state)
             self.assertEqual(validate_completed_training(output / "training_state.json", expected_fold=0)["observed_iteration"], 6000)
+
+    def test_darknet_sigkill_records_interrupt_and_resumes_only_from_inventory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); fold, darknet, data, cfg, initial = self._darknet_training_files(root)
+            darknet.write_text(
+                "#!/usr/bin/env python3\nimport os,pathlib,struct,sys\n"
+                "d={k.strip():v.strip() for k,v in (x.split('=',1) for x in pathlib.Path(sys.argv[3]).read_text().splitlines())}\n"
+                "if pathlib.Path(sys.argv[0]+'.resume').exists(): pathlib.Path(d['backup'],'lesion-yolov3_final.weights').write_bytes(struct.pack('<3iQ',0,2,0,6000*64)+b'weights'); print('6000: finite')\n"
+                "else: p=pathlib.Path(d['backup'],'lesion-yolov3.backup'); p.write_bytes(struct.pack('<3iQ',0,2,0,100*64)+b'weights'); print('100: finite', flush=True); os.kill(os.getpid(),9)\n",
+                encoding="utf-8",
+            ); darknet.chmod(0o755)
+            with self.assertRaisesRegex(Exception, "señal 9"):
+                run_darknet_training(darknet, data, cfg, initial, fold / "training", fold=0)
+            interrupted = json.loads((fold / "training/training_state.json").read_text())
+            self.assertEqual(interrupted["status"], "interrupted")
+            self.assertEqual(interrupted["checkpoint_inventory"][0]["iteration"], 100)
+            self.assertEqual(interrupted["checkpoint_inventory"][0]["fold"], 0)
+            self.assertEqual(interrupted["checkpoint_inventory"][0]["cfg_sha256"], interrupted["contract"]["cfg_sha256"])
+            Path(str(darknet) + ".resume").touch()
+            state = run_darknet_training(darknet, data, cfg, initial, fold / "training", fold=0)
+            self.assertTrue(state["resume"]); self.assertEqual(state["resume_iteration"], 100)
+
+    def test_darknet_sigterm_is_recorded_as_interrupted_not_completed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); fold, darknet, data, cfg, initial = self._darknet_training_files(root)
+            darknet.write_text("#!/usr/bin/env python3\nimport os,signal\nprint('73: finite', flush=True); os.kill(os.getpid(), signal.SIGTERM)\n", encoding="utf-8"); darknet.chmod(0o755)
+            with self.assertRaisesRegex(Exception, "señal 15"):
+                run_darknet_training(darknet, data, cfg, initial, fold / "training", fold=0)
+            self.assertEqual(json.loads((fold / "training/training_state.json").read_text())["status"], "interrupted")
 
     def test_darknet_resume_requires_matching_contract_and_checkpoint(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -111,6 +140,18 @@ class DatasetAndYoloTests(unittest.TestCase):
             foreign = root / "foreign.weights"; self._weights(foreign, 100)
             with self.assertRaisesRegex(ValueError, "contrato|fuera"):
                 run_darknet_training(darknet, data, cfg, initial, output, fold=0, resume_weights=foreign)
+
+    def test_partial_checkpoint_is_rejected_instead_of_selected_by_mtime(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); fold, darknet, data, cfg, initial = self._darknet_training_files(root)
+            output = fold / "training"
+            with self.assertRaises(RuntimeError): run_darknet_training(darknet, data, cfg, initial, output, fold=0)
+            valid = fold / "backup/lesion-yolov3_100.weights"; self._weights(valid, 100)
+            partial = fold / "backup/lesion-yolov3_500.weights"; partial.write_bytes(b"partial")
+            Path(str(darknet) + ".success").touch()
+            state = run_darknet_training(darknet, data, cfg, initial, output, fold=0)
+            self.assertEqual(state["resume_iteration"], 100)
+            self.assertTrue(state["rejected_checkpoints"])
 
     def test_isic_import_never_mixes_official_splits(self):
         with tempfile.TemporaryDirectory() as directory:

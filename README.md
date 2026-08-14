@@ -33,6 +33,8 @@ SLURM. No se afirma una prueba A100 desde la laptop.
 
 El contrato completo está en [docs/BENCHMARK_16_METHODS.md](docs/BENCHMARK_16_METHODS.md)
 y la receta operacional en [docs/CEDIA_FROM_ZERO.md](docs/CEDIA_FROM_ZERO.md).
+La recuperación tras una señal externa y la prueba obligatoria de un solo fold
+están en [docs/CEDIA_HPC_RECOVERY.md](docs/CEDIA_HPC_RECOVERY.md).
 
 ## Requisitos confirmados de CEDIA
 

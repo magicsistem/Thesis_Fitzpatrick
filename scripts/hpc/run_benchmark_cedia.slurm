@@ -49,8 +49,6 @@ if [[ -f "$RUN_ROOT/run_manifest.json" ]]; then
     exit 2
 fi
 
-mkdir -p "$ARTIFACT_ROOT/logs"
-exec > >(tee -a "$ARTIFACT_ROOT/logs/benchmark-${SLURM_ARRAY_JOB_ID:-manual}-$TASK-$STAGE.log") 2>&1
 echo "job=$SLURM_JOB_ID task=$TASK stage=$STAGE host=$(hostname) utc=$(date -u +%FT%TZ) git=$(git -C "$PROJECT_ROOT" rev-parse HEAD)"
 echo "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-unset} warmup=$WARMUP repetitions=$REPETITIONS"
 nvidia-smi

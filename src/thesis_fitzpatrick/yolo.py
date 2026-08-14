@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import random
 import re
+import signal
 import stat
 import struct
 import subprocess
@@ -18,6 +19,10 @@ import numpy as np
 
 from .benchmark import atomic_write_bytes, atomic_write_json, content_hash, load_json, sha256_file
 from .preprocessing import BBox
+
+
+class DarknetInterrupted(RuntimeError):
+    """Darknet stopped by a signal; a validated backup may be resumed."""
 
 
 def bbox_from_mask(mask: np.ndarray) -> BBox:
@@ -217,7 +222,7 @@ def validate_completed_training(state_path: Path, *, expected_fold: int | None =
     state = load_json(state_path)
     contract = state.get("contract", {})
     fold = contract.get("fold")
-    if state.get("schema_version") != 2 or state.get("status") != "completed" or not isinstance(fold, int):
+    if state.get("schema_version") not in {2, 3} or state.get("status") != "completed" or not isinstance(fold, int):
         raise ValueError(f"Estado YOLO no completado o antiguo: {state_path}")
     if expected_fold is not None and fold != expected_fold:
         raise ValueError(f"Estado YOLO pertenece al fold {fold}, no al {expected_fold}")
@@ -263,24 +268,55 @@ def _resume_checkpoint(path: Path, backup: Path, cfg: Path, contract: dict[str, 
     return iteration
 
 
-def _automatic_resume(backup: Path, cfg: Path, contract: dict[str, Any], old_state: dict[str, Any] | None) -> Path | None:
+def _checkpoint_identity(path: Path, backup: Path, cfg: Path, contract: dict[str, Any]) -> dict[str, Any]:
+    iteration = _resume_checkpoint(path, backup, cfg, contract)
+    _regular_nonempty(path)
+    return {
+        "path": str(path.resolve()), "name": path.name, "bytes": path.stat().st_size,
+        "sha256": sha256_file(path), "iteration": iteration,
+        "cfg_sha256": contract["cfg_sha256"], "fold": contract["fold"],
+    }
+
+
+def _resume_contract_matches(previous: dict[str, Any] | None, current: dict[str, Any]) -> bool:
+    """A repair commit may change Git only; data/model identities may not."""
+    if not previous:
+        return False
+    return {key: value for key, value in previous.items() if key != "git_commit"} == {key: value for key, value in current.items() if key != "git_commit"}
+
+
+def _checkpoint_inventory(backup: Path, cfg: Path, contract: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+    valid, rejected = [], []
+    for path in sorted(backup.iterdir()):
+        if not path.is_file() or not (path.name == f"{cfg.stem}.backup" or re.fullmatch(rf"{re.escape(cfg.stem)}_\d+\.weights", path.name)):
+            continue
+        try:
+            valid.append(_checkpoint_identity(path, backup, cfg, contract))
+        except (OSError, ValueError) as exc:
+            rejected.append({"path": str(path.resolve()), "reason": f"{type(exc).__name__}: {exc}"})
+    return valid, rejected
+
+
+def _automatic_resume(backup: Path, cfg: Path, contract: dict[str, Any], old_state: dict[str, Any] | None) -> tuple[Path | None, dict[str, Any] | None]:
     candidates = [
         path for path in backup.iterdir()
         if path.is_file() and (path.name == f"{cfg.stem}.backup" or re.fullmatch(rf"{re.escape(cfg.stem)}_\d+\.weights", path.name))
     ]
     if not candidates:
-        return None
-    if not old_state or old_state.get("contract") != contract:
+        return None, None
+    if not old_state or not _resume_contract_matches(old_state.get("contract"), contract):
         raise ValueError("Hay checkpoints, pero falta un contrato de entrenamiento compatible")
-    valid = []
-    for path in candidates:
-        try:
-            valid.append((_resume_checkpoint(path, backup, cfg, contract), path))
-        except ValueError:
-            continue
+    valid, _rejected = _checkpoint_inventory(backup, cfg, contract)
     if not valid:
         raise ValueError("No existe un checkpoint reanudable válido para este fold/configuración")
-    return max(valid, key=lambda item: item[0])[1]
+    selected = max(valid, key=lambda item: (int(item["iteration"]), item["name"] == f"{cfg.stem}.backup"))
+    # Schema 2 states from the failed CEDIA run predate inventories.  They are
+    # adopted only after their full training contract and the current header,
+    # size and digest have been checked; mtime is never used.
+    previous = {item.get("path"): item for item in old_state.get("checkpoint_inventory", [])}
+    if selected["path"] in previous and previous[selected["path"]] != selected:
+        raise ValueError("El checkpoint cambió desde su inventario registrado")
+    return Path(selected["path"]), selected
 
 
 def run_darknet_training(darknet: Path, data_file: Path, cfg: Path, initial_weights: Path, output: Path, *, fold: int, resume_weights: Path | None = None) -> dict[str, Any]:
@@ -296,9 +332,11 @@ def run_darknet_training(darknet: Path, data_file: Path, cfg: Path, initial_weig
             return {**validate_completed_training(state_path, expected_fold=fold), "reused": True}
         except (KeyError, OSError, ValueError):
             pass
-    resume_weights = resume_weights or _automatic_resume(backup, cfg, contract, old_state)
+    automatic_identity = None
+    if resume_weights is None:
+        resume_weights, automatic_identity = _automatic_resume(backup, cfg, contract, old_state)
     if resume_weights:
-        if not old_state or old_state.get("contract") != contract:
+        if not old_state or not _resume_contract_matches(old_state.get("contract"), contract):
             raise ValueError("La reanudación no coincide con el contrato del fold/configuración")
         resume_iteration = _resume_checkpoint(resume_weights, backup, cfg, contract)
     else:
@@ -308,20 +346,53 @@ def run_darknet_training(darknet: Path, data_file: Path, cfg: Path, initial_weig
         raise ValueError(f"Existen pesos finales sin un estado completed válido; limpie el fold antes de entrenar: {final_weights}")
     weights = resume_weights or initial_weights
     command = [str(darknet), "detector", "train", str(data_file), str(cfg), str(weights), "-dont_show", "-map"]
+    attempt = int(old_state.get("attempt", 0)) + 1 if old_state else 1
+    attempts = output / "attempts"; attempts.mkdir(exist_ok=True)
+    if log.exists() and log.stat().st_size:
+        previous_log = attempts / f"darknet-attempt-{attempt - 1}.log"
+        if not previous_log.exists(): os.replace(log, previous_log)
     state = {
-        "schema_version": 2, "status": "running", "started_utc": datetime.now(timezone.utc).isoformat(),
+        "schema_version": 3, "status": "running", "started_utc": datetime.now(timezone.utc).isoformat(), "attempt": attempt,
         "command": command, "contract": contract, "resume": resume_weights is not None,
         "resume_weights_path": str(resume_weights.resolve()) if resume_weights else None,
         "resume_weights_sha256": sha256_file(resume_weights) if resume_weights else None,
-        "resume_iteration": resume_iteration, "log_path": str(log.resolve()),
+        "resume_iteration": resume_iteration, "resume_checkpoint": automatic_identity,
+        "parent_state_path": str(state_path.resolve()) if old_state else None,
+        "parent_contract": old_state.get("contract") if old_state else None,
+        "log_path": str(log.resolve()), "attempt_log_path": str(log.resolve()),
     }
     atomic_write_json(state_path, state)
-    with log.open("wb") as stream:
-        completed = subprocess.run(command, stdout=stream, stderr=subprocess.STDOUT, check=False)
-    state.update({"returncode": completed.returncode, "observed_iteration": _log_iteration(log), "finished_utc": datetime.now(timezone.utc).isoformat()})
+    received_signal: list[int] = []
+    process: subprocess.Popen[bytes] | None = None
+
+    def on_signal(signum: int, _frame: Any) -> None:
+        received_signal.append(signum)
+        state.update({"status": "interrupted", "signal": signum, "signal_utc": datetime.now(timezone.utc).isoformat()})
+        atomic_write_json(state_path, state)
+        if process is not None and process.poll() is None:
+            try: os.killpg(process.pid, signal.SIGTERM)
+            except ProcessLookupError: pass
+
+    handlers = {item: signal.getsignal(item) for item in (signal.SIGTERM, signal.SIGINT, signal.SIGUSR1)}
     try:
-        if completed.returncode:
-            raise RuntimeError(f"Darknet terminó con código {completed.returncode}")
+        for item in handlers: signal.signal(item, on_signal)
+        with log.open("wb") as stream:
+            process = subprocess.Popen(command, stdout=stream, stderr=subprocess.STDOUT, start_new_session=True)
+            state.update({"darknet_pid": process.pid, "darknet_pgid": process.pid})
+            atomic_write_json(state_path, state)
+            returncode = process.wait()
+    finally:
+        for item, handler in handlers.items(): signal.signal(item, handler)
+    inventory, rejected = _checkpoint_inventory(backup, cfg, contract)
+    state.update({"returncode": returncode, "observed_iteration": _log_iteration(log), "finished_utc": datetime.now(timezone.utc).isoformat(), "checkpoint_inventory": inventory, "rejected_checkpoints": rejected})
+    try:
+        if received_signal or returncode < 0:
+            signal_number = received_signal[-1] if received_signal else -returncode
+            state.update({"status": "interrupted", "signal": signal_number, "error": f"Darknet terminó por señal {signal_number}"})
+            atomic_write_json(state_path, state)
+            raise DarknetInterrupted(state["error"])
+        if returncode:
+            raise RuntimeError(f"Darknet terminó con código {returncode}")
         text = log.read_text(encoding="utf-8", errors="replace")
         if re.search(r"Couldn't open file|cannot open file|fatal error", text, re.IGNORECASE):
             raise RuntimeError("Darknet informó un error fatal en el log")
@@ -333,6 +404,8 @@ def run_darknet_training(darknet: Path, data_file: Path, cfg: Path, initial_weig
         atomic_write_json(state_path, state)
         validate_completed_training(state_path, expected_fold=fold)
         return state
+    except DarknetInterrupted:
+        raise
     except (KeyError, OSError, ValueError, RuntimeError) as exc:
         state.update({"status": "failed", "error": f"{type(exc).__name__}: {exc}"})
         atomic_write_json(state_path, state)

@@ -46,6 +46,14 @@ runtime=$(command -v apptainer || command -v singularity || true)
 [[ -n "$runtime" ]] || { echo "Apptainer or Singularity is required" >&2; exit 2; }
 mkdir -p "$PROJECT_ROOT/.cedia" "$DATA_ROOT" "$PROJECT_ROOT/results"
 
+# CEDIA lacks squashfuse and expands a SIF while executing it.  Keep that
+# expansion on a persistent, auditable filesystem instead of an opaque /tmp.
+APPTAINER_TMPDIR=${APPTAINER_TMPDIR:-${SLURM_TMPDIR:-$PROJECT_ROOT/.cedia/apptainer-tmp}}
+APPTAINER_CACHEDIR=${APPTAINER_CACHEDIR:-$PROJECT_ROOT/.cedia/apptainer-cache}
+mkdir -p "$APPTAINER_TMPDIR" "$APPTAINER_CACHEDIR"
+[[ -w "$APPTAINER_TMPDIR" && -w "$APPTAINER_CACHEDIR" ]] || { echo "Apptainer temporary/cache directory is not writable" >&2; exit 2; }
+export APPTAINER_TMPDIR APPTAINER_CACHEDIR
+
 binds=(--bind "$PROJECT_ROOT:$PROJECT_ROOT")
 if [[ "$DATA_ROOT" != "$PROJECT_ROOT" && "$DATA_ROOT" != "$PROJECT_ROOT"/* ]]; then
     mkdir -p "$DATA_ROOT"
@@ -69,8 +77,8 @@ fi
 device=cpu
 ((USE_NV == 0)) || device=cuda
 
-printf 'container_stage utc=%s host=%s git=%s sif_sha256=%s device=%s\n' \
-    "$(date -u +%FT%TZ)" "$(hostname)" "$(git -C "$PROJECT_ROOT" rev-parse HEAD)" "$actual_sif_sha" "$device"
+printf 'container_stage utc=%s host=%s git=%s sif_sha256=%s device=%s apptainer_tmp=%s apptainer_cache=%s\n' \
+    "$(date -u +%FT%TZ)" "$(hostname)" "$(git -C "$PROJECT_ROOT" rev-parse HEAD)" "$actual_sif_sha" "$device" "$APPTAINER_TMPDIR" "$APPTAINER_CACHEDIR"
 exec "$runtime" "${container_args[@]}" \
     --env "PATH=$path_value" \
     --env "VIRTUAL_ENV=$VENV_PATH" \

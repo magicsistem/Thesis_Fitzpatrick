@@ -49,9 +49,7 @@ elif [[ -n "${VENV_PATH:-}" ]]; then
     python_bin=$VENV_PATH/bin/python
 fi
 
-mkdir -p "$OUTPUT" "$B2_ROOT/logs"
-log=$B2_ROOT/logs/b2-${SLURM_ARRAY_JOB_ID:-manual}-$TASK-$METHOD_ID-fold$FOLD.log
-exec > >(tee -a "$log") 2>&1
+mkdir -p "$OUTPUT" "$PROJECT_ROOT/.cedia/diagnostics"
 echo "job=${SLURM_JOB_ID:-unset} array_job=${SLURM_ARRAY_JOB_ID:-unset} task=$TASK method=$METHOD_ID fold=$FOLD"
 echo "host=$(hostname) utc=$(date -u +%FT%TZ) python=$python_bin git_head=$(git -C "$PROJECT_ROOT" rev-parse HEAD)"
 echo "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-unset}"
@@ -72,22 +70,29 @@ print("validated train-only folds and five frozen YOLO detectors")
 PY
 "$PROJECT_ROOT/scripts/hpc/run_in_container.sh" -- "$python_bin" scripts/benchmark/yolov3.py validate-folds --root "$YOLO_FROZEN_ROOT"
 
-resume=()
-[[ ! -f "$OUTPUT/training_state.pt" ]] || resume=(--resume)
-child=""
+resume=(--resume-if-valid)
+cd "$PROJECT_ROOT"
+source scripts/hpc/runtime_diagnostics.sh
+child=""; child_pgid=""
 stop_child() {
-    echo "signal received at $(date -u +%FT%TZ); last completed epoch remains resumable"
-    [[ -z "$child" ]] || kill -TERM "$child" 2>/dev/null || true
+    runtime_diag_note_signal TERM
+    echo "signal received at $(date -u +%FT%TZ); last atomically completed epoch remains resumable"
+    [[ -z "$child_pgid" ]] || kill -TERM -- "-$child_pgid" 2>/dev/null || true
     [[ -z "$child" ]] || wait "$child" 2>/dev/null || true
+    runtime_diag_stop
     exit 143
 }
 trap stop_child TERM INT
+trap 'runtime_diag_stop' EXIT
 export DATA_ROOT SIF_PATH VENV_PATH=${VENV_PATH:-$PROJECT_ROOT/.cedia/venv}
-"$PROJECT_ROOT/scripts/hpc/run_in_container.sh" -- "$python_bin" scripts/benchmark/train_backend.py \
+runtime_diag_start "$PROJECT_ROOT/.cedia/diagnostics/b2-${SLURM_JOB_ID:-manual}-$METHOD_ID-fold-$FOLD.log"
+setsid "$PROJECT_ROOT/scripts/hpc/run_in_container.sh" -- "$python_bin" scripts/benchmark/train_backend.py \
     --method "$METHOD_ID" --manifest "$TRAIN_MANIFEST" --data-root "$DATA_ROOT" \
     --folds "$FOLDS_FILE" --fold "$FOLD" --p0-root "$P0_ROOT" --output "$OUTPUT" \
     --epochs "$EPOCHS" --seed "$SEED" --device cuda "${resume[@]}" --confirm-training &
 child=$!
+child_pgid=$child
 set +e; wait "$child"; rc=$?; set -e
+child=""; child_pgid=""; runtime_diag_stop
 echo "finished method=$METHOD_ID fold=$FOLD returncode=$rc utc=$(date -u +%FT%TZ)"
 exit "$rc"

@@ -21,6 +21,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from thesis_fitzpatrick.benchmark import atomic_write_json, load_benchmark_methods, load_json, sha256_file  # noqa: E402
+from thesis_fitzpatrick.hpc import write_phase_state  # noqa: E402
 
 
 def arguments_from_command(method: dict) -> tuple[Path, dict[str, str]]:
@@ -88,7 +89,7 @@ def main() -> None:
     parser.add_argument("--p0-root", required=True, type=Path, help="Precomputed common-P0 artifact root; raw images are never substituted")
     parser.add_argument("--output", required=True, type=Path); parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--learning-rate", type=float, default=1e-4); parser.add_argument("--seed", type=int, default=20260806)
-    parser.add_argument("--device", choices=("cpu", "cuda"), default="cpu"); parser.add_argument("--resume", action="store_true"); parser.add_argument("--confirm-training", action="store_true")
+    parser.add_argument("--device", choices=("cpu", "cuda"), default="cpu"); parser.add_argument("--resume", action="store_true"); parser.add_argument("--resume-if-valid", action="store_true"); parser.add_argument("--confirm-training", action="store_true")
     args = parser.parse_args()
     if not args.confirm_training: raise SystemExit("Entrenamiento B2 bloqueado; revise --help y repita con --confirm-training.")
     methods = load_benchmark_methods(REPO_ROOT / "configs" / "segmentation_models.json")
@@ -113,12 +114,15 @@ def main() -> None:
     }
     args.output.mkdir(parents=True, exist_ok=True)
     state_path = args.output / "training_state.pt"
+    phase_path = args.output / "training_phase.json"
     checkpoint = args.output / f"{method['method_id']}.fold{args.fold}.b2.pt"
     metadata_path = checkpoint.with_suffix(checkpoint.suffix + ".metadata.json")
     if checkpoint.is_file() and metadata_path.is_file():
         metadata = load_json(metadata_path)
         if metadata.get("status") == "completed" and metadata.get("training_contract") == contract and metadata.get("checkpoint_sha256") == sha256_file(checkpoint):
             print(json.dumps({**metadata, "reused": True}, indent=2)); return
+    if args.resume_if_valid:
+        args.resume = state_path.is_file()
     if state_path.exists() and not args.resume:
         raise SystemExit("Existe training_state.pt; solicite --resume para validarlo, no se sobrescribirá")
     by_id = {item["image_id"]: item for item in manifest["items"]}
@@ -166,34 +170,40 @@ def main() -> None:
         if bool((logits.detach().min() >= 0) & (logits.detach().max() <= 1)): return torch.nn.functional.binary_cross_entropy(logits, target)
         return torch.nn.functional.binary_cross_entropy_with_logits(logits, target)
 
-    model.train()
-    for epoch in range(start_epoch, args.epochs):
-        random.Random(args.seed + epoch).shuffle(samples)
-        losses = []
-        for _, image_path, mask_path in samples:
-            tensor, mask = tensors(image_path, mask_path)
-            generator = random.Random(args.seed + epoch + sum(map(ord, image_path.name)))
-            if generator.random() < 0.5: tensor = torch.flip(tensor, dims=(-1,)); mask = np.flip(mask, axis=1).copy()
-            if generator.random() < 0.5: tensor = torch.flip(tensor, dims=(-2,)); mask = np.flip(mask, axis=0).copy()
-            optimizer.zero_grad(set_to_none=True)
-            logits = forward_logits(model, tensor, module.__name__)
-            loss = loss_for(logits, mask)
-            loss.backward(); optimizer.step(); losses.append(float(loss.detach().cpu()))
-        model.eval(); validation_losses = []
-        with torch.inference_mode():
-            for _, image_path, mask_path in validation_samples:
-                tensor, mask = tensors(image_path, mask_path); validation_losses.append(float(loss_for(forward_logits(model, tensor, module.__name__), mask).cpu()))
-        model.train(); validation_loss = float(np.mean(validation_losses))
-        history.append({"epoch": epoch, "training_loss": float(np.mean(losses)), "validation_loss": validation_loss, "training_samples": len(losses), "validation_samples": len(validation_losses)})
-        if validation_loss < best_validation_loss:
-            best_validation_loss, best_epoch = validation_loss, epoch; save_inference_checkpoint(torch, model, module.__name__, checkpoint)
-        state_tmp = state_path.with_suffix(state_path.suffix + ".tmp")
-        torch.save({"schema_version": 2, "training_contract": contract, "epoch": epoch, "model": model.state_dict(), "optimizer": optimizer.state_dict(), "history": history, "best_validation_loss": best_validation_loss, "best_epoch": best_epoch}, state_tmp)
-        os.replace(state_tmp, state_path)
-        atomic_write_json(args.output / "training_history.json", history)
-    metadata = {"schema_version": 2, "status": "completed", "protocol": "B2", "backend_id": method["backend_id"], "method_id": method["method_id"], "fold": args.fold, "seed": args.seed, "epochs": args.epochs, "learning_rate": args.learning_rate, "device": args.device, "best_epoch": best_epoch, "best_validation_loss": best_validation_loss, "augmentations": ["horizontal_flip_p0.5", "vertical_flip_p0.5"], "checkpoint_sha256": sha256_file(checkpoint), "parent_native_checkpoint_sha256": sha256_file(Path(values["checkpoint"])), "source_manifest": str(args.manifest), "source_manifest_sha256": sha256_file(args.manifest), "folds": str(args.folds), "folds_sha256": sha256_file(args.folds), "p0_root": str(args.p0_root), "p0_cache_keys": sorted(path.parent.name for _, path, _ in samples + validation_samples), "training_contract": contract, "completed_epochs": len(history), "completed_utc": datetime.now(timezone.utc).isoformat(), "parameter_count": sum(parameter.numel() for parameter in model.parameters())}
-    atomic_write_json(checkpoint.with_suffix(checkpoint.suffix + ".metadata.json"), metadata)
-    print(json.dumps(metadata, indent=2))
+    phase = write_phase_state(phase_path, phase="b2_train", status="running", contract=contract, previous=load_json(phase_path) if phase_path.is_file() else None, checkpoint_path=str(checkpoint.resolve()))
+    try:
+        model.train()
+        for epoch in range(start_epoch, args.epochs):
+            random.Random(args.seed + epoch).shuffle(samples)
+            losses = []
+            for _, image_path, mask_path in samples:
+                tensor, mask = tensors(image_path, mask_path)
+                generator = random.Random(args.seed + epoch + sum(map(ord, image_path.name)))
+                if generator.random() < 0.5: tensor = torch.flip(tensor, dims=(-1,)); mask = np.flip(mask, axis=1).copy()
+                if generator.random() < 0.5: tensor = torch.flip(tensor, dims=(-2,)); mask = np.flip(mask, axis=0).copy()
+                optimizer.zero_grad(set_to_none=True)
+                logits = forward_logits(model, tensor, module.__name__)
+                loss = loss_for(logits, mask)
+                loss.backward(); optimizer.step(); losses.append(float(loss.detach().cpu()))
+            model.eval(); validation_losses = []
+            with torch.inference_mode():
+                for _, image_path, mask_path in validation_samples:
+                    tensor, mask = tensors(image_path, mask_path); validation_losses.append(float(loss_for(forward_logits(model, tensor, module.__name__), mask).cpu()))
+            model.train(); validation_loss = float(np.mean(validation_losses))
+            history.append({"epoch": epoch, "training_loss": float(np.mean(losses)), "validation_loss": validation_loss, "training_samples": len(losses), "validation_samples": len(validation_losses)})
+            if validation_loss < best_validation_loss:
+                best_validation_loss, best_epoch = validation_loss, epoch; save_inference_checkpoint(torch, model, module.__name__, checkpoint)
+            state_tmp = state_path.with_suffix(state_path.suffix + ".tmp")
+            torch.save({"schema_version": 2, "training_contract": contract, "epoch": epoch, "model": model.state_dict(), "optimizer": optimizer.state_dict(), "history": history, "best_validation_loss": best_validation_loss, "best_epoch": best_epoch}, state_tmp)
+            os.replace(state_tmp, state_path)
+            atomic_write_json(args.output / "training_history.json", history)
+        metadata = {"schema_version": 2, "status": "completed", "protocol": "B2", "backend_id": method["backend_id"], "method_id": method["method_id"], "fold": args.fold, "seed": args.seed, "epochs": args.epochs, "learning_rate": args.learning_rate, "device": args.device, "best_epoch": best_epoch, "best_validation_loss": best_validation_loss, "augmentations": ["horizontal_flip_p0.5", "vertical_flip_p0.5"], "checkpoint_sha256": sha256_file(checkpoint), "parent_native_checkpoint_sha256": sha256_file(Path(values["checkpoint"])), "source_manifest": str(args.manifest), "source_manifest_sha256": sha256_file(args.manifest), "folds": str(args.folds), "folds_sha256": sha256_file(args.folds), "p0_root": str(args.p0_root), "p0_cache_keys": sorted(path.parent.name for _, path, _ in samples + validation_samples), "training_contract": contract, "completed_epochs": len(history), "completed_utc": datetime.now(timezone.utc).isoformat(), "parameter_count": sum(parameter.numel() for parameter in model.parameters())}
+        atomic_write_json(checkpoint.with_suffix(checkpoint.suffix + ".metadata.json"), metadata)
+        write_phase_state(phase_path, phase="b2_train", status="completed", contract=contract, previous=phase, checkpoint_sha256=metadata["checkpoint_sha256"], completed_epochs=len(history))
+        print(json.dumps(metadata, indent=2))
+    except BaseException as exc:
+        write_phase_state(phase_path, phase="b2_train", status="interrupted" if isinstance(exc, KeyboardInterrupt) else "failed", contract=contract, previous=phase, error=f"{type(exc).__name__}: {exc}")
+        raise
 
 
 if __name__ == "__main__": main()

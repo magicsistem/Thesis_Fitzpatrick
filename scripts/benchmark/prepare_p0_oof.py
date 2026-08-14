@@ -15,6 +15,7 @@ from PIL import Image
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 from thesis_fitzpatrick.benchmark import ImageInput, atomic_write_json, load_json, sha256_file, validate_dataset_manifest  # noqa: E402
+from thesis_fitzpatrick.hpc import artifact_identity, write_phase_state  # noqa: E402
 from thesis_fitzpatrick.preprocessing import detector_from_config, run_p0  # noqa: E402
 
 
@@ -29,6 +30,9 @@ def main() -> None:
     validate_dataset_manifest(manifest, data_root=args.data_root, require_files=True)
     if manifest.get("split") != "train": raise SystemExit("OOF P0 accepts only split=train; sealed test is forbidden")
     completion_path = args.artifact_root / "oof_manifest.json"
+    frozen_contract = [{"fold": fold, **artifact_identity(args.yolo_root / f"fold-{fold}" / "frozen.json")} for fold in range(5)]
+    contract = {"source_manifest_sha256": sha256_file(args.manifest), "folds_sha256": sha256_file(args.folds), "base_config_sha256": sha256_file(args.config), "yolo_frozen_manifests": frozen_contract}
+    state_path = args.artifact_root / "oof_phase.json"
     if completion_path.is_file():
         previous = load_json(completion_path)
         expected_yolo = [
@@ -38,10 +42,17 @@ def main() -> None:
         valid = previous.get("status") == "completed" and previous.get("failures") == [] and previous.get("images") == len(manifest["items"]) and previous.get("folds") == 5
         valid = valid and previous.get("source_manifest_sha256") == sha256_file(args.manifest) and previous.get("folds_sha256") == sha256_file(args.folds) and previous.get("yolo_frozen_manifests") == expected_yolo
         valid = valid and all(len(list(args.artifact_root.glob(f"*/{item['image_id']}/*/preprocessing_manifest.json"))) == 1 for item in manifest["items"])
+        if valid:
+            for item in manifest["items"]:
+                metadata = next(args.artifact_root.glob(f"*/{item['image_id']}/*/preprocessing_manifest.json"))
+                roi = metadata.parent / "roi_input.png"
+                try: load_json(metadata); artifact_identity(roi)
+                except (OSError, ValueError): valid = False; break
         if not valid:
             raise SystemExit(f"OOF P0 existente pero incompleto o incompatible: {completion_path}")
         print(json.dumps({**previous, "reused": True}, indent=2)); return
     if not args.confirm_run: raise SystemExit(f"OOF P0 would process {len(manifest['items'])} images; repeat with --confirm-run")
+    phase = write_phase_state(state_path, phase="p0_oof", status="running", contract=contract, previous=load_json(state_path) if state_path.is_file() else None)
     by_id = {item["image_id"]: item for item in manifest["items"]}; seen = set(); failures = []
     for fold in folds.get("folds", []):
         frozen = args.yolo_root / f"fold-{fold['fold']}" / "frozen.json"
@@ -67,6 +78,7 @@ def main() -> None:
         ],
     }
     atomic_write_json(completion_path, completion)
+    write_phase_state(state_path, phase="p0_oof", status="completed" if not failures else "failed", contract=contract, previous=phase, output=artifact_identity(completion_path), failures=len(failures))
     print(json.dumps(completion, indent=2))
     if failures: raise SystemExit(2)
 
