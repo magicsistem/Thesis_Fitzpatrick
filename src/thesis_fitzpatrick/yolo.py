@@ -319,6 +319,17 @@ def _automatic_resume(backup: Path, cfg: Path, contract: dict[str, Any], old_sta
     return Path(selected["path"]), selected
 
 
+def discover_darknet_resume(darknet: Path, data_file: Path, cfg: Path, initial_weights: Path, output: Path, *, fold: int) -> dict[str, Any]:
+    """Read-only compatibility report used before a one-fold CEDIA resume."""
+    for path in (darknet, data_file, cfg, initial_weights): _regular_nonempty(path)
+    backup = validate_darknet_data(data_file, fold)
+    contract = _training_contract(darknet, data_file, cfg, initial_weights, fold)
+    state_path = output / "training_state.json"
+    old_state = load_json(state_path) if state_path.is_file() else None
+    checkpoint, identity = _automatic_resume(backup, cfg, contract, old_state)
+    return {"status": old_state.get("status") if old_state else "absent", "fold": fold, "contract": contract, "checkpoint": identity, "resume_weights_path": str(checkpoint) if checkpoint else None}
+
+
 def run_darknet_training(darknet: Path, data_file: Path, cfg: Path, initial_weights: Path, output: Path, *, fold: int, resume_weights: Path | None = None) -> dict[str, Any]:
     for path in (darknet, data_file, cfg, initial_weights):
         _regular_nonempty(path)

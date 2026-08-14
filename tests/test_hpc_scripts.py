@@ -195,11 +195,52 @@ class HPCScriptTests(unittest.TestCase):
         helper = HPC_ROOT / "runtime_diagnostics.sh"
         with tempfile.TemporaryDirectory() as directory:
             project = Path(directory); log = project / "diagnostics.log"
-            command = f'PROJECT_ROOT="{project}"; source "{helper}"; runtime_diag_start "{log}" 1; pid=$RUNTIME_DIAGNOSTICS_PID; runtime_diag_stop; kill -0 "$pid" 2>/dev/null && exit 9 || exit 0'
+            command = f'PROJECT_ROOT="{project}"; source "{helper}"; runtime_diag_start "{log}" 120; pid=$RUNTIME_DIAGNOSTICS_PID; runtime_diag_stop; kill -0 "$pid" 2>/dev/null && exit 9 || exit 0'
+            started = time.monotonic()
             completed = subprocess.run(["bash", "-c", command], check=False, capture_output=True, text=True, timeout=10)
+            elapsed = time.monotonic() - started
             self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertLess(elapsed, 5.0)
             self.assertIn("label=start", log.read_text(encoding="utf-8"))
         self.assertNotIn("\ntee ", helper.read_text(encoding="utf-8"))
+
+    def test_container_runtime_paths_are_job_local_or_safe_fallback(self):
+        runner = HPC_ROOT / "run_in_container.sh"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "project"; root.mkdir(); slurm_tmp = Path(directory) / "slurm"; slurm_tmp.mkdir()
+            env = {**os.environ, "PROJECT_ROOT": str(root), "SLURM_TMPDIR": str(slurm_tmp), "SLURM_JOB_ID": "91", "SLURM_ARRAY_TASK_ID": "2"}
+            completed = subprocess.run(["bash", str(runner), "--check-runtime-paths"], env=env, check=False, capture_output=True, text=True)
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertIn(f"source=slurm tmp={slurm_tmp}/apptainer-91-2-0", completed.stdout)
+            self.assertTrue((slurm_tmp / "apptainer-91-2-0").is_dir())
+            fallback_env = {**env, "SLURM_TMPDIR": "", "SLURM_JOB_ID": "92"}
+            fallback = subprocess.run(["bash", str(runner), "--check-runtime-paths"], env=fallback_env, check=False, capture_output=True, text=True)
+            expected = root / ".cedia/apptainer-tmp" / os.environ.get("USER", str(os.getuid())) / "jobs/92-2-0"
+            self.assertEqual(fallback.returncode, 0, fallback.stderr)
+            self.assertIn(f"source=fallback tmp={expected}", fallback.stdout)
+
+    def test_container_paths_report_unwritable_and_cache_is_concurrent_without_locks(self):
+        runner = HPC_ROOT / "run_in_container.sh"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "project"; blocked = root / ".cedia"; blocked.mkdir(parents=True); blocked.chmod(0o500)
+            env = {**os.environ, "PROJECT_ROOT": str(root), "SLURM_TMPDIR": "", "SLURM_JOB_ID": "93"}
+            failed = subprocess.run(["bash", str(runner), "--check-runtime-paths"], env=env, check=False, capture_output=True, text=True)
+            blocked.chmod(0o700)
+            self.assertEqual(failed.returncode, 2)
+            self.assertIn("APPTAINER_TMPDIR", failed.stderr)
+            cache_root = root / ".cedia/apptainer-cache" / os.environ.get("USER", str(os.getuid())); cache_root.mkdir(parents=True)
+            orphan = cache_root / "orphan.lock"; orphan.write_text("not owned by this pipeline", encoding="utf-8")
+            commands = []
+            for job in ("94", "95"):
+                commands.append(subprocess.Popen(["bash", str(runner), "--check-runtime-paths"], env={**env, "SLURM_JOB_ID": job}, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True))
+            results = [command.communicate(timeout=10) for command in commands]
+            self.assertTrue(all(command.returncode == 0 for command in commands), results)
+            self.assertTrue(orphan.exists())
+
+    def test_yolo_configuration_failure_precedes_attempt_and_only_signal_75_retries(self):
+        yolo = (HPC_ROOT / "train_yolo_cedia.slurm").read_text(encoding="utf-8")
+        self.assertLess(yolo.index("--check-runtime-paths"), yolo.index("yolo_attempt="))
+        self.assertIn('[[ "$rc" != 75 ]] && exit "$rc"', yolo)
 
     def test_yolo_slurm_delegates_checkpoint_validation_to_python(self):
         training = (HPC_ROOT / "train_yolo_cedia.slurm").read_text(encoding="utf-8")

@@ -59,10 +59,19 @@ export YOLO_FROZEN_ROOT="$PROJECT_ROOT/results/benchmark_v1/yolo"
 export DARKNET_GPU_CONFIRMED=YES
 ```
 
-1. Ejecute sólo el preflight: `sbatch scripts/hpc/preflight_pipeline_cedia.slurm`.
-   Deténgase si no completa, si faltan hashes/recursos, o si el diagnóstico
-   reporta un límite/cota problemática.
-2. Tras su `afterok`, reanude **un solo fold que tenga checkpoint**, por
+1. Si el preflight pesado ya completó para el mismo commit/recursos, no lo
+   repita. Ejecute la puerta ligera sin GPU ni entrenamiento:
+
+   ```bash
+   bash scripts/hpc/validate_existing_cedia.sh 1
+   ```
+
+   Crea y verifica los temporales exactos del job local, revisa recursos ya
+   presentes y emite el fingerprint del checkpoint compatible. Deténgase si
+   no muestra `resume_weights_path`; entonces no se debe iniciar Darknet.
+   Use `sbatch scripts/hpc/preflight_pipeline_cedia.slurm` sólo si esa puerta
+   revela que faltan artefactos o si cambió el contrato.
+2. Tras la puerta ligera, reanude **un solo fold que tenga checkpoint**, por
    ejemplo fold 1: `YOLO_MAX_ATTEMPTS=2 sbatch --array=1-1 scripts/hpc/train_yolo_cedia.slurm`.
    El selector no usa `mtime`: exige ruta `fold-1/backup`, nombre Darknet,
    cabecera/iteración, tamaño/hash, hashes de cfg/datos/pesos iniciales y el

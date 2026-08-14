@@ -35,6 +35,10 @@ done
 [[ ! -e "$FOLD_DIR/frozen.json" ]] || { echo "Fold $FOLD is already frozen; refusing to retrain" >&2; exit 2; }
 mkdir -p "$FOLD_DIR/backup" "$FOLD_DIR/training" "$PROJECT_ROOT/.cedia/diagnostics"
 cd "$PROJECT_ROOT"
+if ! scripts/hpc/run_in_container.sh --check-runtime-paths; then
+    echo "Permanent container-directory configuration error; Darknet was not started and no YOLO attempt was consumed." >&2
+    exit 2
+fi
 source scripts/hpc/runtime_diagnostics.sh
 echo "job=${SLURM_JOB_ID:-unset} array_job=${SLURM_ARRAY_JOB_ID:-manual} task=$FOLD fold=$FOLD"
 echo "host=$(hostname) utc=$(date -u +%FT%TZ) git_head=$(git rev-parse HEAD) max_attempts=$MAX_ATTEMPTS"

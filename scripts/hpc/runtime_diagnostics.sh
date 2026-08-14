@@ -27,18 +27,34 @@ runtime_diag_start() {
     mkdir -p "$(dirname -- "$RUNTIME_DIAGNOSTICS_LOG")"
     : >> "$RUNTIME_DIAGNOSTICS_LOG"
     runtime_diag_snapshot start
-    (
-        trap 'exit 0' TERM INT
-        while :; do sleep "$interval" || exit 0; runtime_diag_snapshot sample; done
-    ) &
+    export RUNTIME_DIAGNOSTICS_LOG
+    export -f runtime_diag_snapshot runtime_diag_loop
+    setsid bash -c 'runtime_diag_loop "$1"' _ "$interval" &
     RUNTIME_DIAGNOSTICS_PID=$!
+}
+
+runtime_diag_loop() {
+    local interval=$1 timer=
+    stop() { [[ -z "$timer" ]] || kill -TERM "$timer" 2>/dev/null || true; exit 0; }
+    trap stop TERM INT
+    while :; do
+        sleep "$interval" & timer=$!
+        wait "$timer" || exit 0
+        timer=
+        runtime_diag_snapshot sample
+    done
 }
 
 runtime_diag_note_signal() { [[ -z "${RUNTIME_DIAGNOSTICS_LOG:-}" ]] || runtime_diag_snapshot "signal-$1"; }
 
 runtime_diag_stop() {
     local pid=${RUNTIME_DIAGNOSTICS_PID:-}
-    [[ -z "$pid" ]] || { kill -TERM "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; }
-    [[ -z "${RUNTIME_DIAGNOSTICS_LOG:-}" ]] || runtime_diag_snapshot stop
+    if [[ -n "$pid" ]]; then
+        kill -TERM -- "-$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || true
+        for _ in $(seq 1 40); do kill -0 "$pid" 2>/dev/null || break; sleep 0.1; done
+        kill -0 "$pid" 2>/dev/null && kill -KILL -- "-$pid" 2>/dev/null || true
+        wait "$pid" 2>/dev/null || true
+    fi
+    [[ -z "${RUNTIME_DIAGNOSTICS_LOG:-}" ]] || printf 'diagnostic utc=%s label=stop\n' "$(date -u +%FT%TZ)" >> "$RUNTIME_DIAGNOSTICS_LOG"
     RUNTIME_DIAGNOSTICS_PID=
 }

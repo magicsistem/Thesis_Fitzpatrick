@@ -18,6 +18,7 @@ PROJECT_ROOT=$(realpath "$PROJECT_ROOT"); DATA_ROOT=$(realpath "$DATA_ROOT")
 cd "$PROJECT_ROOT"
 export PROJECT_ROOT DATA_ROOT SIF_PATH
 mkdir -p .cedia
+scripts/hpc/run_in_container.sh --check-runtime-paths
 source scripts/hpc/runtime_diagnostics.sh
 runtime_diag_start "$PROJECT_ROOT/.cedia/diagnostics/preflight-${SLURM_JOB_ID}.log"
 cleanup() { runtime_diag_stop; }
