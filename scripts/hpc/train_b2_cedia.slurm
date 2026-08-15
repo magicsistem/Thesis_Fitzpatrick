@@ -85,7 +85,8 @@ stop_child() {
 trap stop_child TERM INT
 trap 'runtime_diag_stop' EXIT
 export DATA_ROOT SIF_PATH VENV_PATH=${VENV_PATH:-$PROJECT_ROOT/.cedia/venv}
-runtime_diag_start "$PROJECT_ROOT/.cedia/diagnostics/b2-${SLURM_JOB_ID:-manual}-$METHOD_ID-fold-$FOLD.log"
+RUNTIME_DIAGNOSTICS_LOG="$PROJECT_ROOT/.cedia/diagnostics/b2-${SLURM_JOB_ID:-manual}-$METHOD_ID-fold-$FOLD.log"
+export RUNTIME_DIAGNOSTICS_LOG
 setsid "$PROJECT_ROOT/scripts/hpc/run_in_container.sh" -- "$python_bin" scripts/benchmark/train_backend.py \
     --method "$METHOD_ID" --manifest "$TRAIN_MANIFEST" --data-root "$DATA_ROOT" \
     --folds "$FOLDS_FILE" --fold "$FOLD" --p0-root "$P0_ROOT" --output "$OUTPUT" \
@@ -93,6 +94,6 @@ setsid "$PROJECT_ROOT/scripts/hpc/run_in_container.sh" -- "$python_bin" scripts/
 child=$!
 child_pgid=$child
 set +e; wait "$child"; rc=$?; set -e
-child=""; child_pgid=""; runtime_diag_stop
+child=""; child_pgid=""; unset RUNTIME_DIAGNOSTICS_LOG
 echo "finished method=$METHOD_ID fold=$FOLD returncode=$rc utc=$(date -u +%FT%TZ)"
 exit "$rc"

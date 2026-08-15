@@ -22,7 +22,7 @@ from thesis_fitzpatrick.annotations import export_consensus_manifest, initialize
 from thesis_fitzpatrick.benchmark import atomic_write_json
 from thesis_fitzpatrick.datasets import OFFICIAL_IMAPP_FILES, audit_manifest_overlap, build_isic2018_manifest, build_novice_manifest, download_resumable, file_digest, import_imapp_metadata, majority_consensus, staple_consensus, verify_manifest_files
 from thesis_fitzpatrick.reporting import aggregate, paired_comparisons, write_report
-from thesis_fitzpatrick.yolo import bbox_from_mask, bbox_to_darknet, darknet_to_bbox, patch_yolov3_cfg, prepare_darknet_fold, run_darknet_training, select_validation_configuration, validate_completed_training
+from thesis_fitzpatrick.yolo import bbox_from_mask, bbox_to_darknet, darknet_to_bbox, patch_yolov3_cfg, prepare_darknet_fold, run_darknet_training, select_validation_configuration, validate_completed_training, validate_existing_yolo_folds
 from thesis_fitzpatrick.benchmark import content_hash, sha256_file
 import sealed_test
 from setup_yolov3_darknet import cpu_build_command, gpu_build_command
@@ -119,6 +119,27 @@ class DatasetAndYoloTests(unittest.TestCase):
             Path(str(darknet) + ".resume").touch()
             state = run_darknet_training(darknet, data, cfg, initial, fold / "training", fold=0)
             self.assertTrue(state["resume"]); self.assertEqual(state["resume_iteration"], 100)
+
+    def test_resume_gate_accepts_completed_fold_one_and_four_compatible_checkpoints(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fold_one, darknet, _data, _cfg, initial = self._darknet_training_files(root, fold=1)
+            Path(str(darknet) + ".success").touch()
+            run_darknet_training(darknet, fold_one / "lesion.data", fold_one / "lesion-yolov3.cfg", initial, fold_one / "training", fold=1)
+            Path(str(darknet) + ".success").unlink()
+            for fold_index in (0, 2, 3, 4):
+                fold, _darknet, data, cfg, _initial = self._darknet_training_files(root, fold=fold_index)
+                with self.assertRaises(RuntimeError): run_darknet_training(darknet, data, cfg, initial, fold / "training", fold=fold_index)
+                self._weights(fold / "backup/lesion-yolov3.backup", 100)
+            manifest = root / "train.json"; manifest.write_text(json.dumps({"split": "train", "items": []}), encoding="utf-8")
+            folds = root / "folds.json"; folds.write_text(json.dumps({"folds": [{"fold": index, "train_ids": [str(index)], "validation_ids": []} for index in range(5)]}), encoding="utf-8")
+            sentinels = {path: path.read_bytes() for path in root.glob("fold-*/training/training_state.json")} | {path: path.read_bytes() for path in root.glob("fold-*/backup/*")}
+            report = validate_existing_yolo_folds(darknet, manifest, folds, initial, root)
+            self.assertEqual(report["fold_1"]["status"], "completed")
+            self.assertEqual(report["fold_1"]["observed_iteration"], 6000)
+            self.assertTrue(report["fold_1"]["final_weights_bytes"])
+            self.assertEqual(set(report["pending"]), {"0", "2", "3", "4"})
+            self.assertEqual({path: path.read_bytes() for path in sentinels}, sentinels)
 
     def test_darknet_sigterm_is_recorded_as_interrupted_not_completed(self):
         with tempfile.TemporaryDirectory() as directory:

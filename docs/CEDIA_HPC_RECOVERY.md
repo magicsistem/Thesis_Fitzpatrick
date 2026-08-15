@@ -59,36 +59,42 @@ export YOLO_FROZEN_ROOT="$PROJECT_ROOT/results/benchmark_v1/yolo"
 export DARKNET_GPU_CONFIRMED=YES
 ```
 
-1. Si el preflight pesado ya completó para el mismo commit/recursos, no lo
-   repita. Ejecute la puerta ligera sin GPU ni entrenamiento:
+1. Si el preflight pesado ya completó para los mismos recursos, no lo repita.
+   `login1` no tiene runtime Apptainer: envíe la puerta ligera CPU, de sólo
+   lectura, que valida el fold 1 completado y los cuatro checkpoints de
+   reanudación:
 
    ```bash
-   bash scripts/hpc/validate_existing_cedia.sh 1
+   sbatch scripts/hpc/validate_existing_cedia.slurm
    ```
 
-   Crea y verifica los temporales exactos del job local, revisa recursos ya
-   presentes y emite el fingerprint del checkpoint compatible. Sus dos
-   comprobaciones Python se ejecutan mediante `run_in_container.sh` dentro de
-   la SIF (nunca con el `python3` del nodo login); no llama bootstrap ni
-   preparación de datos. Deténgase si no muestra `resume_weights_path`;
-   entonces no se debe iniciar Darknet.
+   No usa GPU, bootstrap, preparación ni preflight. Todo Python ocurre dentro
+   de la SIF. Deténgase si el job no informa `status: valid`, fold 1 en 6000 y
+   una `resume_weights_path` para cada fold 0, 2, 3 y 4.
    Use `sbatch scripts/hpc/preflight_pipeline_cedia.slurm` sólo si esa puerta
    revela que faltan artefactos o si cambió el contrato.
-2. Tras la puerta ligera, reanude **un solo fold que tenga checkpoint**, por
-   ejemplo fold 1: `YOLO_MAX_ATTEMPTS=2 sbatch --array=1-1 scripts/hpc/train_yolo_cedia.slurm`.
-   El selector no usa `mtime`: exige ruta `fold-1/backup`, nombre Darknet,
+2. `run_in_container.sh` crea un temporal Apptainer único por invocación y lo
+   limpia al terminar el payload. La caché sigue siendo estable por usuario;
+   no hay locks propios del pipeline. Los diagnósticos de entrenamiento los
+   inicia el wrapper después de calcular esas rutas y registran PID/PGID del
+   payload y cualquier proceso Darknet visible.
+3. Para la ejecución definitiva, el launcher dedicado no espera, no solicita
+   GPU y **no envía preflight**. El validador es la primera dependencia y
+   excluye fold 1 de entrenamiento, pero el freeze posterior procesa los cinco:
+
+   ```bash
+   bash scripts/hpc/launch_pipeline_cedia.sh --resume-existing --skip-preflight
+   ```
+
+   El manifiesto atómico queda en `.cedia/resume_pipeline_*.json`. Un segundo
+   lanzamiento se rechaza si aún hay jobs de ese manifiesto o resultados
+   descendientes existentes.
+4. El selector no usa `mtime`: exige ruta `fold-N/backup`, nombre Darknet,
    cabecera/iteración, tamaño/hash, hashes de cfg/datos/pesos iniciales y el
    contrato anterior. Un cambio sólo de commit de la reparación es trazado y
    permitido; cualquier otro cambio se rechaza. Deténgase ante estado
    `failed`, `interrupted` sin inventario válido, un segundo `75`, o cualquier
    nueva señal externa: entregue los diagnósticos a CEDIA antes de escalar.
-3. Si llega a 6000 y `training_state.json` es `completed`, ejecute
-   `sbatch --dependency=afterok:<YOLO_FOLD_JOB> --array=1-1 scripts/hpc/finalize_yolo_cedia.slurm`.
-   Deténgase si no aparecen `frozen.json`, su hash y la validación de fold.
-4. Sólo después de validar el fold de prueba, envíe los restantes de forma
-   controlada: `sbatch --array=0-4%2 scripts/hpc/train_yolo_cedia.slurm`, y
-   luego `finalize_yolo_cedia.slurm`. La puerta de cinco folds impide P0 si
-   falta uno, está incompleto o su hash cambia.
 5. P0, B2 y benchmark se envían únicamente mediante las dependencias
    `afterok` del launcher. Deténgase tras P0 si `oof_manifest.json` o
    `oof_phase.json` no son `completed`; tras B2 si falta cualquiera de los

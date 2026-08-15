@@ -12,7 +12,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from thesis_fitzpatrick.benchmark import atomic_write_json, load_json  # noqa: E402
-from thesis_fitzpatrick.yolo import DarknetInterrupted, collect_raw_validation_detections, discover_darknet_resume, freeze_detector, patch_yolov3_cfg, prepare_darknet_fold, run_darknet_training, select_validation_configuration, validate_frozen_yolo, validate_frozen_yolo_set  # noqa: E402
+from thesis_fitzpatrick.yolo import DarknetInterrupted, collect_raw_validation_detections, discover_darknet_resume, freeze_detector, patch_yolov3_cfg, prepare_darknet_fold, run_darknet_training, select_validation_configuration, validate_existing_yolo_folds, validate_frozen_yolo, validate_frozen_yolo_set  # noqa: E402
 
 
 def parse_args() -> argparse.Namespace:
@@ -36,6 +36,10 @@ def parse_args() -> argparse.Namespace:
     resume_plan.add_argument("--darknet", required=True, type=Path); resume_plan.add_argument("--data", required=True, type=Path)
     resume_plan.add_argument("--cfg", required=True, type=Path); resume_plan.add_argument("--initial-weights", required=True, type=Path)
     resume_plan.add_argument("--fold", required=True, type=int); resume_plan.add_argument("--output", required=True, type=Path)
+    existing = sub.add_parser("validate-existing", help="Read-only gate for fold 1 completed plus four resumable folds")
+    existing.add_argument("--darknet", required=True, type=Path); existing.add_argument("--manifest", required=True, type=Path)
+    existing.add_argument("--folds", required=True, type=Path); existing.add_argument("--initial-weights", required=True, type=Path)
+    existing.add_argument("--root", required=True, type=Path)
     freeze = sub.add_parser("freeze")
     freeze.add_argument("--cfg", required=True, type=Path); freeze.add_argument("--weights", required=True, type=Path)
     freeze.add_argument("--validation-report", required=True, type=Path); freeze.add_argument("--confidence", required=True, type=float)
@@ -74,6 +78,8 @@ def main() -> None:
             raise SystemExit(75) from exc
     elif args.action == "resume-plan":
         print(json.dumps(discover_darknet_resume(args.darknet, args.data, args.cfg, args.initial_weights, args.output, fold=args.fold), indent=2))
+    elif args.action == "validate-existing":
+        print(json.dumps(validate_existing_yolo_folds(args.darknet, args.manifest, args.folds, args.initial_weights, args.root), indent=2))
     elif args.action == "validate":
         records = json.loads(args.predictions.read_text(encoding="utf-8"))
         report = select_validation_configuration(records, *[[float(value) for value in getattr(args, name).split(",")] for name in ("confidence_candidates", "nms_candidates", "margin_candidates")])

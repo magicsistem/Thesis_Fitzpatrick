@@ -72,20 +72,34 @@ configure_runtime_paths() {
         tmp_root="$PROJECT_ROOT/.cedia/apptainer-tmp/${USER:-$(id -u)}/jobs/$job_key"
         RUNTIME_TMP_SOURCE=fallback
     fi
-    APPTAINER_TMPDIR=$tmp_root
-    TMPDIR=$tmp_root
+    ensure_runtime_directory APPTAINER_TMPDIR_BASE "$tmp_root" || return 2
+    APPTAINER_TMPDIR=$(mktemp -d "$tmp_root/invocation.XXXXXX") || {
+        echo "Cannot create an isolated Apptainer invocation directory" >&2; directory_details APPTAINER_TMPDIR_BASE "$tmp_root"; return 2
+    }
+    RUNTIME_TMP_BASE=$tmp_root
+    TMPDIR=$APPTAINER_TMPDIR
     APPTAINER_CACHEDIR="$PROJECT_ROOT/.cedia/apptainer-cache/${USER:-$(id -u)}"
     ensure_runtime_directory APPTAINER_TMPDIR "$APPTAINER_TMPDIR" || return 2
     ensure_runtime_directory TMPDIR "$TMPDIR" || return 2
     ensure_runtime_directory APPTAINER_CACHEDIR "$APPTAINER_CACHEDIR" || return 2
     SINGULARITY_TMPDIR=$APPTAINER_TMPDIR
     SINGULARITY_CACHEDIR=$APPTAINER_CACHEDIR
-    export APPTAINER_TMPDIR APPTAINER_CACHEDIR TMPDIR SINGULARITY_TMPDIR SINGULARITY_CACHEDIR RUNTIME_TMP_SOURCE
+    export APPTAINER_TMPDIR APPTAINER_CACHEDIR TMPDIR SINGULARITY_TMPDIR SINGULARITY_CACHEDIR RUNTIME_TMP_SOURCE RUNTIME_TMP_BASE
     printf 'runtime_paths source=%s tmp=%s cache=%s lock_policy=apptainer-managed-no-pipeline-lock\n' \
         "$RUNTIME_TMP_SOURCE" "$APPTAINER_TMPDIR" "$APPTAINER_CACHEDIR"
 }
 
 configure_runtime_paths || exit $?
+cleanup_runtime() {
+    local rc=$?
+    trap - EXIT
+    if [[ -n "${RUNTIME_DIAGNOSTICS_STARTED:-}" ]]; then runtime_diag_stop || true; fi
+    if [[ -n "${RUNTIME_TMP_BASE:-}" && "$APPTAINER_TMPDIR" == "$RUNTIME_TMP_BASE"/invocation.* && -d "$APPTAINER_TMPDIR" ]]; then
+        rm -rf -- "$APPTAINER_TMPDIR" || echo "Could not remove isolated Apptainer temporary directory: $APPTAINER_TMPDIR" >&2
+    fi
+    exit "$rc"
+}
+trap cleanup_runtime EXIT
 ((CHECK_RUNTIME_PATHS == 0)) || exit 0
 [[ -f "$SIF_PATH" ]] || { echo "SIF not found: $SIF_PATH" >&2; exit 2; }
 
@@ -126,11 +140,27 @@ device=cpu
 
 printf 'container_stage utc=%s host=%s git=%s sif_sha256=%s device=%s apptainer_tmp=%s apptainer_cache=%s tmpdir=%s\n' \
     "$(date -u +%FT%TZ)" "$(hostname)" "$(git -C "$PROJECT_ROOT" rev-parse HEAD)" "$actual_sif_sha" "$device" "$APPTAINER_TMPDIR" "$APPTAINER_CACHEDIR" "$TMPDIR"
-exec "$runtime" "${container_args[@]}" \
+if [[ -n "${RUNTIME_DIAGNOSTICS_LOG:-}" ]]; then
+    mkdir -p "$(dirname -- "$RUNTIME_DIAGNOSTICS_LOG")"
+    printf 'container_runtime utc=%s job=%s task=%s tmp=%s cache=%s tmpdir=%s\n' \
+        "$(date -u +%FT%TZ)" "${SLURM_JOB_ID:-none}" "${SLURM_ARRAY_TASK_ID:-none}" "$APPTAINER_TMPDIR" "$APPTAINER_CACHEDIR" "$TMPDIR" >> "$RUNTIME_DIAGNOSTICS_LOG"
+fi
+"$runtime" "${container_args[@]}" \
     --env "PATH=$path_value" \
     --env "VIRTUAL_ENV=$VENV_PATH" \
     --env "PYTHONPATH=$PROJECT_ROOT/src:$PROJECT_ROOT/scripts" \
     --env "THESIS_ADAPTER_PYTHON=$python_value" \
     --env "THESIS_DEVICE=$device" \
     --env "THESIS_DATA_ROOT=$DATA_ROOT" \
-    "$SIF_PATH" "$@"
+    "$SIF_PATH" "$@" &
+payload_pid=$!
+if [[ -n "${RUNTIME_DIAGNOSTICS_LOG:-}" ]]; then
+    source "$SCRIPT_DIR/runtime_diagnostics.sh"
+    runtime_diag_start "$RUNTIME_DIAGNOSTICS_LOG" 60 "$payload_pid"
+    RUNTIME_DIAGNOSTICS_STARTED=1
+fi
+set +e
+wait "$payload_pid"
+payload_rc=$?
+set -e
+exit "$payload_rc"

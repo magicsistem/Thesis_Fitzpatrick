@@ -33,7 +33,7 @@ class HPCScriptTests(unittest.TestCase):
         yolo = (HPC_ROOT / "train_yolo_cedia.slurm").read_text(encoding="utf-8")
         b2 = (HPC_ROOT / "train_b2_cedia.slurm").read_text(encoding="utf-8")
         benchmark = (HPC_ROOT / "run_benchmark_cedia.slurm").read_text(encoding="utf-8")
-        gpu_templates = [path.read_text(encoding="utf-8") for path in HPC_ROOT.glob("*.slurm")]
+        gpu_templates = [path.read_text(encoding="utf-8") for path in HPC_ROOT.glob("*.slurm") if "#SBATCH --gres=gpu" in path.read_text(encoding="utf-8")]
         for text in gpu_templates:
             self.assertIn("#SBATCH --partition=gpu", text)
             self.assertIn("#SBATCH --gres=gpu:a100-sxm4-40gb:1", text)
@@ -49,6 +49,11 @@ class HPCScriptTests(unittest.TestCase):
         self.assertIn("oof_manifest.json", b2)
         self.assertIn("#SBATCH --array=0-5%1", benchmark)
         self.assertIn("stages=(A B1 C0 C1 C2 C3)", benchmark)
+        validator = (HPC_ROOT / "validate_existing_cedia.slurm").read_text(encoding="utf-8")
+        self.assertNotIn("#SBATCH --partition=gpu", validator)
+        self.assertNotIn("--gres=gpu", validator)
+        self.assertNotIn("bootstrap_cedia", validator)
+        self.assertNotIn("preflight_pipeline", validator)
 
     def test_every_a100_submission_satisfies_cedia_gpu_qos_floor(self):
         templates = list(HPC_ROOT.glob("*.slurm")) + [
@@ -105,7 +110,8 @@ class HPCScriptTests(unittest.TestCase):
             "bootstrap_cedia.sh", "validate_existing_cedia.sh",
             "preflight_pipeline_cedia.slurm", "train_yolo_cedia.slurm",
             "train_b2_cedia.slurm", "run_benchmark_cedia.slurm",
-            "launch_all_cedia.sh",
+            "launch_all_cedia.sh", "launch_pipeline_cedia.sh",
+            "validate_existing_cedia.slurm",
         )
         for name in host_entrypoints:
             text = (HPC_ROOT / name).read_text(encoding="utf-8")
@@ -266,13 +272,74 @@ class HPCScriptTests(unittest.TestCase):
             env = {**os.environ, "PROJECT_ROOT": str(root), "SLURM_TMPDIR": str(slurm_tmp), "SLURM_JOB_ID": "91", "SLURM_ARRAY_TASK_ID": "2"}
             completed = subprocess.run(["bash", str(runner), "--check-runtime-paths"], env=env, check=False, capture_output=True, text=True)
             self.assertEqual(completed.returncode, 0, completed.stderr)
-            self.assertIn(f"source=slurm tmp={slurm_tmp}/apptainer-91-2-0", completed.stdout)
-            self.assertTrue((slurm_tmp / "apptainer-91-2-0").is_dir())
+            first_tmp = re.search(r"tmp=([^ ]+)", completed.stdout).group(1)
+            self.assertIn(f"source=slurm tmp={slurm_tmp}/apptainer-91-2-0/invocation.", completed.stdout)
+            self.assertFalse(Path(first_tmp).exists(), "check invocation must clean its own temporary directory")
+            repeated = subprocess.run(["bash", str(runner), "--check-runtime-paths"], env=env, check=False, capture_output=True, text=True)
+            self.assertNotEqual(first_tmp, re.search(r"tmp=([^ ]+)", repeated.stdout).group(1))
             fallback_env = {**env, "SLURM_TMPDIR": "", "SLURM_JOB_ID": "92"}
             fallback = subprocess.run(["bash", str(runner), "--check-runtime-paths"], env=fallback_env, check=False, capture_output=True, text=True)
             expected = root / ".cedia/apptainer-tmp" / os.environ.get("USER", str(os.getuid())) / "jobs/92-2-0"
             self.assertEqual(fallback.returncode, 0, fallback.stderr)
-            self.assertIn(f"source=fallback tmp={expected}", fallback.stdout)
+            self.assertIn(f"source=fallback tmp={expected}/invocation.", fallback.stdout)
+
+    def test_container_invocations_are_concurrent_isolated_cleaned_and_preserve_exit_code(self):
+        runner = HPC_ROOT / "run_in_container.sh"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "project"; root.mkdir(); (root / "data").mkdir(); sif = root / "image.sif"; sif.write_bytes(b"sif")
+            venv = root / "venv/bin"; venv.mkdir(parents=True); (venv / "python").write_text("#!/bin/sh\n", encoding="utf-8"); (venv / "python").chmod(0o755)
+            fake = Path(directory) / "bin"; fake.mkdir(); calls = Path(directory) / "runtime.calls"
+            (fake / "git").write_text("#!/bin/sh\necho deadbeef\n", encoding="utf-8")
+            (fake / "apptainer").write_text("#!/bin/sh\nprintf '%s\\n' \"$APPTAINER_TMPDIR\" >> \"$CALL_LOG\"\nsleep 0.1\nexit \"${FAKE_EXIT:-0}\"\n", encoding="utf-8")
+            for path in fake.iterdir(): path.chmod(0o755)
+            env = {**os.environ, "PROJECT_ROOT": str(root), "DATA_ROOT": str(root / "data"), "SIF_PATH": str(sif), "VENV_PATH": str(root / "venv"), "SLURM_TMPDIR": "", "SLURM_JOB_ID": "99", "SLURM_ARRAY_TASK_ID": "3", "CALL_LOG": str(calls), "FAKE_EXIT": "17", "PATH": f"{fake}:{os.environ['PATH']}"}
+            failed = subprocess.run(["bash", str(runner), "--cpu", "--allow-unverified-sif", "--", "true"], env=env, check=False, capture_output=True, text=True)
+            self.assertEqual(failed.returncode, 17)
+            first = calls.read_text(encoding="utf-8").splitlines()[0]
+            self.assertFalse(Path(first).exists())
+            env["FAKE_EXIT"] = "0"
+            jobs = [subprocess.Popen(["bash", str(runner), "--cpu", "--allow-unverified-sif", "--", "true"], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) for _ in range(2)]
+            results = [job.communicate(timeout=10) for job in jobs]
+            self.assertTrue(all(job.returncode == 0 for job in jobs), results)
+            paths = calls.read_text(encoding="utf-8").splitlines()
+            self.assertEqual(len(paths), len(set(paths)))
+            self.assertTrue(all(not Path(path).exists() for path in paths))
+            diagnostic = root / "diagnostics.log"
+            diagnosed = subprocess.run(["bash", str(runner), "--cpu", "--allow-unverified-sif", "--", "true"], env={**env, "RUNTIME_DIAGNOSTICS_LOG": str(diagnostic)}, check=False, capture_output=True, text=True)
+            self.assertEqual(diagnosed.returncode, 0, diagnosed.stderr)
+            diagnostic_text = diagnostic.read_text(encoding="utf-8")
+            self.assertIn("container_runtime", diagnostic_text)
+            self.assertIn("label=start", diagnostic_text)
+            self.assertRegex(diagnostic_text, r"target_pid=\d+")
+
+    def test_resume_launcher_submits_only_afterok_without_preflight_and_rejects_duplicate(self):
+        source = HPC_ROOT / "launch_pipeline_cedia.sh"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "project"; hpc = root / "scripts/hpc"; hpc.mkdir(parents=True)
+            target = hpc / source.name; target.write_text(source.read_text(encoding="utf-8"), encoding="utf-8"); target.chmod(0o755)
+            data = root / "data/manifests"; data.mkdir(parents=True)
+            for name in ("isic2018_task1_train_disjoint.json", "isic2018_task1_validation_disjoint.json", "isic2018_task1_train_disjoint_folds_5.json"):
+                (data / name).write_text("{}", encoding="utf-8")
+            (root / "image.sif").write_bytes(b"sif"); (root / "results/benchmark_v1/yolo").mkdir(parents=True)
+            fake = Path(directory) / "bin"; fake.mkdir(); calls = Path(directory) / "sbatch.calls"
+            (fake / "git").write_text("#!/bin/sh\ncase \"$*\" in *'--abbrev-ref HEAD'*) echo fix/hpc-pipeline-validation;; *'status --porcelain'*) :;; *'rev-parse HEAD'*) echo deadbeef;; *'merge-base'*) exit 0;; esac\n", encoding="utf-8")
+            (fake / "squeue").write_text("#!/bin/sh\n[ -n \"${SQUEUE_ACTIVE:-}\" ] && echo \"$SQUEUE_ACTIVE\"\n", encoding="utf-8")
+            (fake / "sbatch").write_text(f"#!/bin/sh\nprintf '%s\\n' \"$*\" >> {calls}\nprintf '23%s;cluster\\n' \"$(wc -l < {calls})\"\n", encoding="utf-8")
+            for path in fake.iterdir(): path.chmod(0o755)
+            env = {**os.environ, "PROJECT_ROOT": str(root), "DATA_ROOT": str(root / "data"), "SIF_PATH": str(root / "image.sif"), "PATH": f"{fake}:{os.environ['PATH']}", "HOME": directory}
+            started = time.monotonic(); completed = subprocess.run(["bash", str(target), "--resume-existing", "--skip-preflight"], env=env, cwd=root, check=False, capture_output=True, text=True, timeout=10)
+            self.assertEqual(completed.returncode, 0, completed.stderr); self.assertLess(time.monotonic() - started, 2)
+            submitted = calls.read_text(encoding="utf-8").splitlines(); self.assertEqual(len(submitted), 8)
+            self.assertNotIn("preflight_pipeline", "\n".join(submitted)); self.assertIn("--array=0,2,3,4%2", submitted[1]); self.assertIn("--array=0-74%2", submitted[4])
+            manifest = next((root / ".cedia").glob("resume_pipeline_*.json")); payload = json.loads(manifest.read_text(encoding="utf-8"))
+            self.assertTrue(payload["skip_preflight"]); self.assertTrue(payload["fold_1_reused"]); self.assertEqual(payload["yolo_folds"], "0,2,3,4"); self.assertEqual(len(payload["jobs"]), 8)
+            self.assertTrue(all(item["dependency"] is None or item["dependency"].startswith("afterok:") for item in payload["jobs"]))
+            self.assertEqual([item["dependency"] for item in payload["jobs"]], [None, "afterok:231", "afterok:232", "afterok:233", "afterok:234", "afterok:235", "afterok:236", "afterok:237"])
+            duplicate = subprocess.run(["bash", str(target), "--resume-existing", "--skip-preflight"], env={**env, "SQUEUE_ACTIVE": "2301"}, cwd=root, check=False, capture_output=True, text=True)
+            self.assertEqual(duplicate.returncode, 2); self.assertIn("Active resume job", duplicate.stderr)
+            (root / "results/benchmark_v1/preprocessing").mkdir(parents=True); (root / "results/benchmark_v1/preprocessing/oof_manifest.json").write_text("{}", encoding="utf-8")
+            completed_result = subprocess.run(["bash", str(target), "--resume-existing", "--skip-preflight"], env=env, cwd=root, check=False, capture_output=True, text=True)
+            self.assertEqual(completed_result.returncode, 2); self.assertIn("Existing downstream result", completed_result.stderr)
 
     def test_container_paths_report_unwritable_and_cache_is_concurrent_without_locks(self):
         runner = HPC_ROOT / "run_in_container.sh"

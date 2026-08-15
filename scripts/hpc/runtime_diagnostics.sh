@@ -2,13 +2,14 @@
 # Source this file from a Slurm script.  It writes directly to one log file.
 
 runtime_diag_snapshot() {
-    local label=${1:?label required}
+    local label=${1:?label required} target=${2:-${RUNTIME_DIAGNOSTICS_TARGET_PID:-}}
     {
-        printf 'diagnostic utc=%s label=%s job=%s host=%s pid=%s pgid=%s\n' \
-            "$(date -u +%FT%TZ)" "$label" "${SLURM_JOB_ID:-none}" "$(hostname)" "$$" "$(ps -o pgid= -p $$ | tr -d ' ')"
+        printf 'diagnostic utc=%s label=%s job=%s task=%s host=%s pid=%s pgid=%s target_pid=%s target_pgid=%s\n' \
+            "$(date -u +%FT%TZ)" "$label" "${SLURM_JOB_ID:-none}" "${SLURM_ARRAY_TASK_ID:-none}" "$(hostname)" "$$" "$(ps -o pgid= -p $$ | tr -d ' ')" "$target" "$(ps -o pgid= -p "$target" 2>/dev/null | tr -d ' ' || true)"
         printf 'tmp TMPDIR=%s APPTAINER_TMPDIR=%s APPTAINER_CACHEDIR=%s SLURM_TMPDIR=%s\n' \
             "${TMPDIR:-}" "${APPTAINER_TMPDIR:-}" "${APPTAINER_CACHEDIR:-}" "${SLURM_TMPDIR:-}"
         printf 'processes\n'; ps -eo pid=,ppid=,pgid=,sid=,stat=,etime=,rss=,args= | awk -v sid="$(ps -o sid= -p $$ | tr -d ' ')" '$4 == sid || NR == 1' || true
+        printf 'darknet_processes\n'; ps -eo pid=,ppid=,pgid=,sid=,stat=,etime=,rss=,args= | awk '$0 ~ /(^|[[:space:]])[^[:space:]]*darknet([[:space:]]|$)/' || true
         printf 'cgroup\n'; cat /proc/self/cgroup 2>&1 || true
         while IFS= read -r item; do
             [[ -r "$item" ]] && { printf '%s=' "$item"; cat "$item"; }
@@ -23,25 +24,26 @@ runtime_diag_snapshot() {
 
 runtime_diag_start() {
     RUNTIME_DIAGNOSTICS_LOG=${1:?diagnostic log required}
-    local interval=${2:-60}
+    local interval=${2:-60} target=${3:-}
     mkdir -p "$(dirname -- "$RUNTIME_DIAGNOSTICS_LOG")"
     : >> "$RUNTIME_DIAGNOSTICS_LOG"
-    runtime_diag_snapshot start
-    export RUNTIME_DIAGNOSTICS_LOG
+    RUNTIME_DIAGNOSTICS_TARGET_PID=$target
+    runtime_diag_snapshot start "$target"
+    export RUNTIME_DIAGNOSTICS_LOG RUNTIME_DIAGNOSTICS_TARGET_PID
     export -f runtime_diag_snapshot runtime_diag_loop
-    setsid bash -c 'runtime_diag_loop "$1"' _ "$interval" &
+    setsid bash -c 'runtime_diag_loop "$1" "$2"' _ "$interval" "$target" &
     RUNTIME_DIAGNOSTICS_PID=$!
 }
 
 runtime_diag_loop() {
-    local interval=$1 timer=
+    local interval=$1 target=${2:-} timer=
     stop() { [[ -z "$timer" ]] || kill -TERM "$timer" 2>/dev/null || true; exit 0; }
     trap stop TERM INT
     while :; do
         sleep "$interval" & timer=$!
         wait "$timer" || exit 0
         timer=
-        runtime_diag_snapshot sample
+        runtime_diag_snapshot sample "$target"
     done
 }
 

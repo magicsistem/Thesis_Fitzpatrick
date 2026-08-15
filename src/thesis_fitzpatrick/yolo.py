@@ -140,7 +140,7 @@ def _darknet_data(path: Path) -> dict[str, str]:
     return values
 
 
-def validate_darknet_data(path: Path, fold: int) -> Path:
+def validate_darknet_data(path: Path, fold: int, *, create_backup: bool = True) -> Path:
     values = _darknet_data(path)
     missing = {"classes", "train", "valid", "names", "backup"} - set(values)
     if missing:
@@ -157,7 +157,8 @@ def validate_darknet_data(path: Path, fold: int) -> Path:
     expected = path.resolve().parent / "backup"
     if backup.resolve() != expected.resolve() or path.resolve().parent.name != f"fold-{fold}":
         raise ValueError(f"La ruta backup no corresponde al fold {fold}: {backup}")
-    backup.mkdir(parents=True, exist_ok=True)
+    if create_backup:
+        backup.mkdir(parents=True, exist_ok=True)
     if not backup.is_dir() or not os.access(backup, os.W_OK | os.X_OK):
         raise PermissionError(f"El directorio backup no existe o no es escribible: {backup}")
     return backup
@@ -247,7 +248,7 @@ def validate_completed_training(state_path: Path, *, expected_fold: int | None =
     final_weights = Path(state["final_weights_path"])
     if final_weights.name != Path(contract["cfg_path"]).stem + "_final.weights":
         raise ValueError(f"Nombre de pesos finales inesperado: {final_weights}")
-    if final_weights.parent.resolve() != validate_darknet_data(Path(contract["data_path"]), fold).resolve():
+    if final_weights.parent.resolve() != validate_darknet_data(Path(contract["data_path"]), fold, create_backup=False).resolve():
         raise ValueError("Los pesos finales no pertenecen al backup del fold")
     if darknet_weights_iteration(final_weights, batch) < max_batches:
         raise ValueError("Los pesos finales corresponden a un entrenamiento incompleto")
@@ -322,12 +323,32 @@ def _automatic_resume(backup: Path, cfg: Path, contract: dict[str, Any], old_sta
 def discover_darknet_resume(darknet: Path, data_file: Path, cfg: Path, initial_weights: Path, output: Path, *, fold: int) -> dict[str, Any]:
     """Read-only compatibility report used before a one-fold CEDIA resume."""
     for path in (darknet, data_file, cfg, initial_weights): _regular_nonempty(path)
-    backup = validate_darknet_data(data_file, fold)
+    backup = validate_darknet_data(data_file, fold, create_backup=False)
     contract = _training_contract(darknet, data_file, cfg, initial_weights, fold)
     state_path = output / "training_state.json"
     old_state = load_json(state_path) if state_path.is_file() else None
     checkpoint, identity = _automatic_resume(backup, cfg, contract, old_state)
     return {"status": old_state.get("status") if old_state else "absent", "fold": fold, "contract": contract, "checkpoint": identity, "resume_weights_path": str(checkpoint) if checkpoint else None}
+
+
+def validate_existing_yolo_folds(darknet: Path, manifest_path: Path, folds_path: Path, initial_weights: Path, root: Path) -> dict[str, Any]:
+    """Read-only gate for a resumed five-fold CEDIA DAG."""
+    manifest, folds = load_json(manifest_path), load_json(folds_path)
+    entries = folds.get("folds", [])
+    if manifest.get("split") != "train" or {item.get("fold") for item in entries} != set(range(5)):
+        raise ValueError("Se requieren manifest train y exactamente cinco folds")
+    if any(set(item.get("train_ids", [])) & set(item.get("validation_ids", [])) for item in entries):
+        raise ValueError("Los folds contienen fuga train/validation")
+    fold_one = root / "fold-1"
+    completed = validate_completed_training(fold_one / "training" / "training_state.json", expected_fold=1)
+    pending = {}
+    for fold in (0, 2, 3, 4):
+        fold_root = root / f"fold-{fold}"
+        report = discover_darknet_resume(darknet, fold_root / "lesion.data", fold_root / "lesion-yolov3.cfg", initial_weights, fold_root / "training", fold=fold)
+        if report["status"] == "completed" or not report["resume_weights_path"]:
+            raise ValueError(f"Fold {fold} no es pendiente/reanudable de forma segura")
+        pending[str(fold)] = report
+    return {"status": "valid", "fold_1": {"status": completed["status"], "observed_iteration": completed["observed_iteration"], "final_weights_path": completed["final_weights_path"], "final_weights_bytes": completed["final_weights_bytes"]}, "pending": pending}
 
 
 def run_darknet_training(darknet: Path, data_file: Path, cfg: Path, initial_weights: Path, output: Path, *, fold: int, resume_weights: Path | None = None) -> dict[str, Any]:

@@ -69,13 +69,14 @@ export DATA_ROOT SIF_PATH
 
 for attempt in $(seq 1 "$MAX_ATTEMPTS"); do
     echo "yolo_attempt=$attempt/$MAX_ATTEMPTS utc=$(date -u +%FT%TZ)"
-    runtime_diag_start "$PROJECT_ROOT/.cedia/diagnostics/yolo-${SLURM_JOB_ID:-manual}-fold-$FOLD-attempt-$attempt.log"
+    RUNTIME_DIAGNOSTICS_LOG="$PROJECT_ROOT/.cedia/diagnostics/yolo-${SLURM_JOB_ID:-manual}-fold-$FOLD-attempt-$attempt.log"
+    export RUNTIME_DIAGNOSTICS_LOG
     setsid "$PROJECT_ROOT/scripts/hpc/run_in_container.sh" -- python scripts/benchmark/yolov3.py train \
         --darknet "$DARKNET_BIN" --data "$FOLD_DIR/lesion.data" --cfg "$FOLD_DIR/lesion-yolov3.cfg" \
         --initial-weights "$INITIAL_WEIGHTS" --fold "$FOLD" --output "$FOLD_DIR/training" --confirm-training &
     child=$!; child_pgid=$child
     set +e; wait "$child"; rc=$?; set -e
-    child=""; child_pgid=""; runtime_diag_stop
+    child=""; child_pgid=""; unset RUNTIME_DIAGNOSTICS_LOG
     echo "finished fold=$FOLD attempt=$attempt returncode=$rc utc=$(date -u +%FT%TZ)"
     [[ "$rc" != 75 ]] && exit "$rc"
     (( attempt < MAX_ATTEMPTS )) || exit 75
