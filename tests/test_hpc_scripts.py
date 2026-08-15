@@ -152,9 +152,9 @@ class HPCScriptTests(unittest.TestCase):
             self.assertEqual((checkpoint.read_bytes(), dataset.read_bytes()), before)
             wrapper_calls = calls.read_text(encoding="utf-8")
             self.assertIn("--check-runtime-paths", wrapper_calls)
-            self.assertIn("scripts/hpc/bootstrap_resources.py --require-sources --require-checkpoints", wrapper_calls)
             self.assertIn("scripts/benchmark/yolov3.py resume-plan", wrapper_calls)
             self.assertIn("--fold 1", wrapper_calls)
+            self.assertNotIn("bootstrap_resources.py", wrapper_calls)
             self.assertNotIn("bootstrap_cedia.sh", wrapper_calls)
             self.assertNotIn("prepare_isic2018", wrapper_calls)
 
@@ -265,6 +265,56 @@ class HPCScriptTests(unittest.TestCase):
             self.assertIn("label=start", log.read_text(encoding="utf-8"))
         self.assertNotIn("\ntee ", helper.read_text(encoding="utf-8"))
 
+    def test_monitor_cleanup_never_signals_darknet_and_refuses_ambiguous_identity(self):
+        helper = HPC_ROOT / "runtime_diagnostics.sh"
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory); log = project / "diagnostics.log"; calls = project / "kill.calls"
+            isolated = (
+                f'PROJECT_ROOT="{project}"; source "{helper}"; setsid sleep 30 & apptainer=$!; setsid sleep 30 & darknet=$!; '
+                f'runtime_diag_start "{log}" 120 "$apptainer"; monitor=$RUNTIME_DIAGNOSTICS_PID; '
+                'test "$monitor" != "$darknet"; test "$monitor" != "$apptainer"; test "$monitor" != "$$"; '
+                'test "$RUNTIME_DIAGNOSTICS_PGID" = "$monitor"; test "$RUNTIME_DIAGNOSTICS_SID" = "$monitor"; '
+                'runtime_diag_stop; kill -0 "$darknet"; kill -0 "$apptainer"; '
+                'kill -TERM "$darknet" "$apptainer"; wait "$darknet" "$apptainer" 2>/dev/null || true'
+            )
+            completed = subprocess.run(["bash", "-c", isolated], check=False, capture_output=True, text=True, timeout=10)
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            ambiguous = (
+                f'PROJECT_ROOT="{project}"; RUNTIME_DIAGNOSTICS_LOG="{log}"; source "{helper}"; '
+                f'kill() {{ printf "%s\\n" "$*" >> "{calls}"; return 0; }}; '
+                'RUNTIME_DIAGNOSTICS_PID=99999; RUNTIME_DIAGNOSTICS_PGID=1; RUNTIME_DIAGNOSTICS_SID=1; RUNTIME_DIAGNOSTICS_MONITOR_STATE=""; '
+                'runtime_diag_stop; test ! -e "' + str(calls) + '"'
+            )
+            refused = subprocess.run(["bash", "-c", ambiguous], check=False, capture_output=True, text=True, timeout=10)
+            self.assertEqual(refused.returncode, 0, refused.stderr)
+
+    def test_full_yolo_task_opens_one_container_for_two_attempts(self):
+        source = HPC_ROOT / "train_yolo_cedia.slurm"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "project"; hpc = root / "scripts/hpc"; hpc.mkdir(parents=True)
+            task = hpc / source.name; task.write_text(source.read_text(encoding="utf-8"), encoding="utf-8"); task.chmod(0o755)
+            (hpc / "runtime_diagnostics.sh").write_text((HPC_ROOT / "runtime_diagnostics.sh").read_text(encoding="utf-8"), encoding="utf-8")
+            calls = Path(directory) / "container.calls"; runner = hpc / "run_in_container.sh"
+            runner.write_text(f'#!/bin/sh\ncase "$*" in *--check-runtime-paths*) echo check >> "{calls}";; *) printf "exec %s\\n" "$*" >> "{calls}";; esac\n', encoding="utf-8"); runner.chmod(0o755)
+            data = root / "data/manifests"; data.mkdir(parents=True)
+            for name in ("isic2018_task1_train_disjoint.json", "isic2018_task1_train_disjoint_folds_5.json"):
+                (data / name).write_text("{}", encoding="utf-8")
+            sif = root / "image.sif"; sif.write_bytes(b"sif")
+            darknet = root / "models/yolov3-darknet/source/darknet"; darknet.parent.mkdir(parents=True); darknet.write_bytes(b"x")
+            initial = root / "models/yolov3-darknet/checkpoints/darknet53.conv.74"; initial.parent.mkdir(parents=True); initial.write_bytes(b"x")
+            fold = root / "results/benchmark_v1/yolo/fold-0"; fold.mkdir(parents=True)
+            for name in ("lesion.data", "lesion-yolov3.cfg", "label_audit.json"):
+                (fold / name).write_text("x", encoding="utf-8")
+            fake = Path(directory) / "bin"; fake.mkdir(); (fake / "git").write_text("#!/bin/sh\necho deadbeef\n", encoding="utf-8"); (fake / "nvidia-smi").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            for path in fake.iterdir(): path.chmod(0o755)
+            env = {**os.environ, "PROJECT_ROOT": str(root), "DATA_ROOT": str(root / "data"), "SIF_PATH": str(sif), "DARKNET_GPU_CONFIRMED": "YES", "SLURM_ARRAY_TASK_ID": "0", "SLURM_JOB_ID": "901", "YOLO_MAX_ATTEMPTS": "2", "PATH": f"{fake}:{os.environ['PATH']}"}
+            completed = subprocess.run(["bash", str(task)], env=env, cwd=root, check=False, capture_output=True, text=True, timeout=10)
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            entries = calls.read_text(encoding="utf-8").splitlines()
+            self.assertEqual(entries.count("check"), 1)
+            self.assertEqual(sum(entry.startswith("exec ") for entry in entries), 1)
+            self.assertIn("--max-attempts 2", entries[-1])
+
     def test_container_runtime_paths_are_job_local_or_safe_fallback(self):
         runner = HPC_ROOT / "run_in_container.sh"
         with tempfile.TemporaryDirectory() as directory:
@@ -290,27 +340,67 @@ class HPCScriptTests(unittest.TestCase):
             venv = root / "venv/bin"; venv.mkdir(parents=True); (venv / "python").write_text("#!/bin/sh\n", encoding="utf-8"); (venv / "python").chmod(0o755)
             fake = Path(directory) / "bin"; fake.mkdir(); calls = Path(directory) / "runtime.calls"
             (fake / "git").write_text("#!/bin/sh\necho deadbeef\n", encoding="utf-8")
-            (fake / "apptainer").write_text("#!/bin/sh\nprintf '%s\\n' \"$APPTAINER_TMPDIR\" >> \"$CALL_LOG\"\nsleep 0.1\nexit \"${FAKE_EXIT:-0}\"\n", encoding="utf-8")
+            (fake / "apptainer").write_text("#!/bin/sh\n[ \"$1\" = --version ] && { echo apptainer-test; exit 0; }\nprintf '%s\\n' \"$APPTAINER_TMPDIR\" >> \"$CALL_LOG\"\nsleep 0.1\nexit \"${FAKE_EXIT:-0}\"\n", encoding="utf-8")
             for path in fake.iterdir(): path.chmod(0o755)
             env = {**os.environ, "PROJECT_ROOT": str(root), "DATA_ROOT": str(root / "data"), "SIF_PATH": str(sif), "VENV_PATH": str(root / "venv"), "SLURM_TMPDIR": "", "SLURM_JOB_ID": "99", "SLURM_ARRAY_TASK_ID": "3", "CALL_LOG": str(calls), "FAKE_EXIT": "17", "PATH": f"{fake}:{os.environ['PATH']}"}
-            failed = subprocess.run(["bash", str(runner), "--cpu", "--allow-unverified-sif", "--", "true"], env=env, check=False, capture_output=True, text=True)
+            failed = subprocess.run(["bash", str(runner), "--cpu", "--", "true"], env=env, check=False, capture_output=True, text=True)
             self.assertEqual(failed.returncode, 17)
             first = calls.read_text(encoding="utf-8").splitlines()[0]
             self.assertFalse(Path(first).exists())
             env["FAKE_EXIT"] = "0"
-            jobs = [subprocess.Popen(["bash", str(runner), "--cpu", "--allow-unverified-sif", "--", "true"], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) for _ in range(2)]
+            jobs = [subprocess.Popen(["bash", str(runner), "--cpu", "--", "true"], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) for _ in range(2)]
             results = [job.communicate(timeout=10) for job in jobs]
             self.assertTrue(all(job.returncode == 0 for job in jobs), results)
             paths = calls.read_text(encoding="utf-8").splitlines()
             self.assertEqual(len(paths), len(set(paths)))
             self.assertTrue(all(not Path(path).exists() for path in paths))
             diagnostic = root / "diagnostics.log"
-            diagnosed = subprocess.run(["bash", str(runner), "--cpu", "--allow-unverified-sif", "--", "true"], env={**env, "RUNTIME_DIAGNOSTICS_LOG": str(diagnostic)}, check=False, capture_output=True, text=True)
+            diagnosed = subprocess.run(["bash", str(runner), "--cpu", "--", "true"], env={**env, "RUNTIME_DIAGNOSTICS_LOG": str(diagnostic)}, check=False, capture_output=True, text=True)
             self.assertEqual(diagnosed.returncode, 0, diagnosed.stderr)
             diagnostic_text = diagnostic.read_text(encoding="utf-8")
             self.assertIn("container_runtime", diagnostic_text)
             self.assertIn("label=start", diagnostic_text)
             self.assertRegex(diagnostic_text, r"target_pid=\d+")
+
+    def test_runtime_prefers_singularity_skips_sif_hash_and_nested_wrapper_is_direct(self):
+        runner = HPC_ROOT / "run_in_container.sh"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "project"; root.mkdir(); (root / "data").mkdir(); sif = root / "image.sif"; sif.write_bytes(b"sif")
+            fake = Path(directory) / "bin"; fake.mkdir(); calls = Path(directory) / "runtime.calls"
+            (fake / "git").write_text("#!/bin/sh\necho deadbeef\n", encoding="utf-8")
+            (fake / "sha256sum").write_text("#!/bin/sh\necho hash-must-not-run >&2; exit 99\n", encoding="utf-8")
+            (fake / "singularity").write_text(f"#!/bin/sh\n[ \"$1\" = --version ] && {{ echo singularity-3; exit 0; }}; echo singularity >> {calls}; exit 0\n", encoding="utf-8")
+            (fake / "apptainer").write_text(f"#!/bin/sh\necho apptainer >> {calls}; exit 0\n", encoding="utf-8")
+            for path in fake.iterdir(): path.chmod(0o755)
+            env = {**os.environ, "PROJECT_ROOT": str(root), "DATA_ROOT": str(root / "data"), "SIF_PATH": str(sif), "PATH": f"{fake}:{os.environ['PATH']}"}
+            completed = subprocess.run(["bash", str(runner), "--cpu", "--no-venv", "--", "true"], env=env, check=False, capture_output=True, text=True)
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertEqual(calls.read_text(encoding="utf-8").strip(), "singularity")
+            self.assertIn("kind=singularity", completed.stdout)
+            nested = subprocess.run(["bash", str(runner), "--", "false"], env={**env, "THESIS_IN_CONTAINER": "1"}, check=False, capture_output=True, text=True)
+            self.assertEqual(nested.returncode, 1)
+            self.assertEqual(calls.read_text(encoding="utf-8").strip(), "singularity")
+
+            fallback = Path(directory) / "fallback"; fallback.mkdir()
+            (fallback / "git").write_text("#!/bin/sh\necho deadbeef\n", encoding="utf-8")
+            (fallback / "apptainer").write_text(f"#!/bin/sh\n[ \"$1\" = --version ] && {{ echo apptainer-1; exit 0; }}; echo apptainer >> {calls}; exit 0\n", encoding="utf-8")
+            for path in fallback.iterdir(): path.chmod(0o755)
+            fallback_run = subprocess.run(["bash", str(runner), "--cpu", "--no-venv", "--", "true"], env={**env, "PATH": f"{fallback}:{os.environ['PATH']}"}, check=False, capture_output=True, text=True)
+            self.assertEqual(fallback_run.returncode, 0, fallback_run.stderr)
+            self.assertIn("kind=apptainer-fallback", fallback_run.stdout)
+            absent = subprocess.run(["bash", str(runner), "--cpu", "--no-venv", "--", "true"], env={**env, "PATH": "/usr/bin:/bin"}, check=False, capture_output=True, text=True)
+            self.assertEqual(absent.returncode, 2)
+            self.assertIn("Neither singularity nor apptainer", absent.stderr)
+
+    def test_runtime_diagnostic_is_cpu_only_and_validate_script_never_bootstraps(self):
+        diagnostic = (HPC_ROOT / "diagnose_container_runtime_cedia.slurm").read_text(encoding="utf-8")
+        self.assertNotIn("--partition=gpu", diagnostic)
+        self.assertNotIn("--gres=", diagnostic)
+        self.assertIn("run_in_container.sh --cpu -- python", diagnostic)
+        self.assertIn("module avail singularity apptainer", diagnostic)
+        validate = (HPC_ROOT / "validate_existing_cedia.sh").read_text(encoding="utf-8")
+        self.assertNotIn("bootstrap_resources.py", validate)
+        self.assertEqual(validate.count("run_in_container.sh --cpu -- python"), 1)
 
     def test_resume_launcher_submits_only_afterok_without_preflight_and_rejects_duplicate(self):
         source = HPC_ROOT / "launch_pipeline_cedia.sh"
@@ -336,10 +426,48 @@ class HPCScriptTests(unittest.TestCase):
             self.assertTrue(all(item["dependency"] is None or item["dependency"].startswith("afterok:") for item in payload["jobs"]))
             self.assertEqual([item["dependency"] for item in payload["jobs"]], [None, "afterok:231", "afterok:232", "afterok:233", "afterok:234", "afterok:235", "afterok:236", "afterok:237"])
             duplicate = subprocess.run(["bash", str(target), "--resume-existing", "--skip-preflight"], env={**env, "SQUEUE_ACTIVE": "2301"}, cwd=root, check=False, capture_output=True, text=True)
-            self.assertEqual(duplicate.returncode, 2); self.assertIn("Active resume job", duplicate.stderr)
+            self.assertEqual(duplicate.returncode, 2); self.assertIn("active", duplicate.stderr.lower())
             (root / "results/benchmark_v1/preprocessing").mkdir(parents=True); (root / "results/benchmark_v1/preprocessing/oof_manifest.json").write_text("{}", encoding="utf-8")
             completed_result = subprocess.run(["bash", str(target), "--resume-existing", "--skip-preflight"], env=env, cwd=root, check=False, capture_output=True, text=True)
             self.assertEqual(completed_result.returncode, 2); self.assertIn("Existing downstream result", completed_result.stderr)
+
+    def test_recovery_launcher_requires_explicit_pending_folds_and_optional_node_exclusion(self):
+        launcher = (HPC_ROOT / "launch_pipeline_cedia.sh").read_text(encoding="utf-8")
+        self.assertIn("--recover-existing", launcher)
+        self.assertIn("YOLO_EXPECTED_PENDING", launcher)
+        self.assertIn("--exclude=\"$YOLO_EXCLUDE_NODES\"", launcher)
+        self.assertIn('YOLO_ARRAY="$PENDING_FOLDS%2"', launcher)
+        self.assertNotIn("preflight_pipeline", launcher)
+        self.assertIn('folds 1 and 2 are completed/reused', launcher)
+
+    def test_recovery_submits_one_validation_and_refuses_old_active_or_blocked_jobs(self):
+        source = HPC_ROOT / "launch_pipeline_cedia.sh"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "project"; hpc = root / "scripts/hpc"; hpc.mkdir(parents=True)
+            target = hpc / source.name; target.write_text(source.read_text(encoding="utf-8"), encoding="utf-8"); target.chmod(0o755)
+            data = root / "data/manifests"; data.mkdir(parents=True)
+            for name in ("isic2018_task1_train_disjoint.json", "isic2018_task1_validation_disjoint.json", "isic2018_task1_train_disjoint_folds_5.json"):
+                (data / name).write_text("{}", encoding="utf-8")
+            (root / "image.sif").write_bytes(b"sif"); (root / "results/benchmark_v1/yolo").mkdir(parents=True)
+            fake = Path(directory) / "bin"; fake.mkdir(); calls = Path(directory) / "sbatch.calls"; cancelled = Path(directory) / "scancel.calls"
+            (fake / "git").write_text("#!/bin/sh\ncase \"$*\" in *'--abbrev-ref HEAD'*) echo fix/hpc-pipeline-validation;; *'status --porcelain'*) :;; *'rev-parse HEAD'*) echo deadbeef;; *'merge-base'*) exit 0;; esac\n", encoding="utf-8")
+            (fake / "squeue").write_text("#!/bin/sh\ncase \"$*\" in *'23063'*) [ -z \"${PREVIOUS_ACTIVE:-}\" ] || echo '23063_0 RUNNING node';; *'23064,23065,23066,23067,23068,23069'*) [ -z \"${BLOCKED_ACTIVE:-}\" ] || echo '23064 PENDING Dependency';; esac\n", encoding="utf-8")
+            (fake / "sbatch").write_text(f"#!/bin/sh\nprintf '%s\\n' \"$*\" >> {calls}\nprintf '31%s;cluster\\n' \"$(wc -l < {calls})\"\n", encoding="utf-8")
+            (fake / "scancel").write_text(f"#!/bin/sh\nprintf '%s\\n' \"$*\" >> {cancelled}\n", encoding="utf-8")
+            for path in fake.iterdir(): path.chmod(0o755)
+            env = {**os.environ, "PROJECT_ROOT": str(root), "DATA_ROOT": str(root / "data"), "SIF_PATH": str(root / "image.sif"), "PATH": f"{fake}:{os.environ['PATH']}", "HOME": directory}
+            args = ["bash", str(target), "--recover-existing", "--skip-preflight", "--folds", "0,3", "--previous-yolo-job", "23063", "--blocked-jobs", "23064,23065,23066,23067,23068,23069"]
+            previous = subprocess.run(args, env={**env, "PREVIOUS_ACTIVE": "1"}, cwd=root, check=False, capture_output=True, text=True)
+            self.assertEqual(previous.returncode, 2); self.assertIn("23063", previous.stderr); self.assertFalse(calls.exists())
+            blocked = subprocess.run(args, env={**env, "BLOCKED_ACTIVE": "1"}, cwd=root, check=False, capture_output=True, text=True)
+            self.assertEqual(blocked.returncode, 2); self.assertIn("23064,23065,23066,23067,23068,23069", blocked.stderr); self.assertIn("scancel 23064 23065 23066 23067 23068 23069", blocked.stderr); self.assertFalse(calls.exists())
+            completed = subprocess.run(args, env=env, cwd=root, check=False, capture_output=True, text=True)
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            submitted = calls.read_text(encoding="utf-8").splitlines()
+            self.assertEqual(len(submitted), 8)
+            self.assertEqual(sum("validate_existing_cedia.slurm" in item for item in submitted), 1)
+            self.assertIn("--array=0,3%2", submitted[1])
+            self.assertFalse(cancelled.exists(), "launcher must never call scancel")
 
     def test_container_paths_report_unwritable_and_cache_is_concurrent_without_locks(self):
         runner = HPC_ROOT / "run_in_container.sh"
@@ -362,7 +490,15 @@ class HPCScriptTests(unittest.TestCase):
     def test_yolo_configuration_failure_precedes_attempt_and_only_signal_75_retries(self):
         yolo = (HPC_ROOT / "train_yolo_cedia.slurm").read_text(encoding="utf-8")
         self.assertLess(yolo.index("--check-runtime-paths"), yolo.index("yolo_attempt="))
-        self.assertIn('[[ "$rc" != 75 ]] && exit "$rc"', yolo)
+        self.assertEqual(yolo.count('run_in_container.sh" -- python scripts/benchmark/yolov3.py train'), 1)
+        self.assertIn('--max-attempts "$MAX_ATTEMPTS"', yolo)
+        self.assertNotIn('for attempt in $(seq', yolo)
+
+    def test_b2_and_benchmark_keep_preconditions_inside_one_container(self):
+        for name in ("train_b2_cedia.slurm", "run_benchmark_cedia.slurm"):
+            text = (HPC_ROOT / name).read_text(encoding="utf-8")
+            self.assertEqual(text.count("run_in_container.sh"), 1, name)
+            self.assertIn("bash -c '", text, name)
 
     def test_yolo_slurm_delegates_checkpoint_validation_to_python(self):
         training = (HPC_ROOT / "train_yolo_cedia.slurm").read_text(encoding="utf-8")

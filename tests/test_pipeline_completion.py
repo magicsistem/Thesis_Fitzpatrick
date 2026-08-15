@@ -22,7 +22,7 @@ from thesis_fitzpatrick.annotations import export_consensus_manifest, initialize
 from thesis_fitzpatrick.benchmark import atomic_write_json
 from thesis_fitzpatrick.datasets import OFFICIAL_IMAPP_FILES, audit_manifest_overlap, build_isic2018_manifest, build_novice_manifest, download_resumable, file_digest, import_imapp_metadata, majority_consensus, staple_consensus, verify_manifest_files
 from thesis_fitzpatrick.reporting import aggregate, paired_comparisons, write_report
-from thesis_fitzpatrick.yolo import bbox_from_mask, bbox_to_darknet, darknet_to_bbox, patch_yolov3_cfg, prepare_darknet_fold, run_darknet_training, select_validation_configuration, validate_completed_training, validate_existing_yolo_folds
+from thesis_fitzpatrick.yolo import bbox_from_mask, bbox_to_darknet, darknet_to_bbox, discover_darknet_resume, patch_yolov3_cfg, prepare_darknet_fold, run_darknet_training, run_darknet_training_with_retries, select_validation_configuration, validate_completed_training, validate_existing_yolo_folds
 from thesis_fitzpatrick.benchmark import content_hash, sha256_file
 import sealed_test
 from setup_yolov3_darknet import cpu_build_command, gpu_build_command
@@ -106,19 +106,27 @@ class DatasetAndYoloTests(unittest.TestCase):
                 "#!/usr/bin/env python3\nimport os,pathlib,struct,sys\n"
                 "d={k.strip():v.strip() for k,v in (x.split('=',1) for x in pathlib.Path(sys.argv[3]).read_text().splitlines())}\n"
                 "if pathlib.Path(sys.argv[0]+'.resume').exists(): pathlib.Path(d['backup'],'lesion-yolov3_final.weights').write_bytes(struct.pack('<3iQ',0,2,0,6000*64)+b'weights'); print('6000: finite')\n"
-                "else: p=pathlib.Path(d['backup'],'lesion-yolov3.backup'); p.write_bytes(struct.pack('<3iQ',0,2,0,100*64)+b'weights'); print('100: finite', flush=True); os.kill(os.getpid(),9)\n",
+                "else: pathlib.Path(sys.argv[0]+'.resume').touch(); p=pathlib.Path(d['backup'],'lesion-yolov3.backup'); p.write_bytes(struct.pack('<3iQ',0,2,0,100*64)+b'weights'); print('100: finite', flush=True); os.kill(os.getpid(),9)\n",
                 encoding="utf-8",
             ); darknet.chmod(0o755)
-            with self.assertRaisesRegex(Exception, "señal 9"):
-                run_darknet_training(darknet, data, cfg, initial, fold / "training", fold=0)
-            interrupted = json.loads((fold / "training/training_state.json").read_text())
-            self.assertEqual(interrupted["status"], "interrupted")
-            self.assertEqual(interrupted["checkpoint_inventory"][0]["iteration"], 100)
-            self.assertEqual(interrupted["checkpoint_inventory"][0]["fold"], 0)
-            self.assertEqual(interrupted["checkpoint_inventory"][0]["cfg_sha256"], interrupted["contract"]["cfg_sha256"])
-            Path(str(darknet) + ".resume").touch()
-            state = run_darknet_training(darknet, data, cfg, initial, fold / "training", fold=0)
-            self.assertTrue(state["resume"]); self.assertEqual(state["resume_iteration"], 100)
+            state = run_darknet_training_with_retries(darknet, data, cfg, initial, fold / "training", fold=0, max_attempts=2)
+            self.assertEqual(state["attempt"], 2); self.assertTrue(state["resume"]); self.assertEqual(state["resume_iteration"], 100)
+            self.assertTrue((fold / "training/attempts/darknet-attempt-1.log").is_file())
+            self.assertIn("training_seconds", state); self.assertIn("retry_seconds", state)
+            self.assertEqual(state["termination_cause"], "max_batches_reached")
+            self.assertEqual(state["last_progress_iteration"], 6000)
+            self.assertTrue(state["heartbeat_utc"])
+
+    def test_resume_hashes_only_the_selected_checkpoint(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); fold, darknet, data, cfg, initial = self._darknet_training_files(root)
+            with self.assertRaises(RuntimeError): run_darknet_training(darknet, data, cfg, initial, fold / "training", fold=0)
+            self._weights(fold / "backup/lesion-yolov3_100.weights", 100)
+            self._weights(fold / "backup/lesion-yolov3_200.weights", 200)
+            report = discover_darknet_resume(darknet, data, cfg, initial, fold / "training", fold=0)
+            self.assertEqual(report["checkpoint"]["iteration"], 200)
+            self.assertEqual(report["hash_files_count"], 1)
+            self.assertEqual(report["hash_bytes_total"], (fold / "backup/lesion-yolov3_200.weights").stat().st_size)
 
     def test_resume_gate_accepts_completed_fold_one_and_four_compatible_checkpoints(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -135,9 +143,9 @@ class DatasetAndYoloTests(unittest.TestCase):
             folds = root / "folds.json"; folds.write_text(json.dumps({"folds": [{"fold": index, "train_ids": [str(index)], "validation_ids": []} for index in range(5)]}), encoding="utf-8")
             sentinels = {path: path.read_bytes() for path in root.glob("fold-*/training/training_state.json")} | {path: path.read_bytes() for path in root.glob("fold-*/backup/*")}
             report = validate_existing_yolo_folds(darknet, manifest, folds, initial, root)
-            self.assertEqual(report["fold_1"]["status"], "completed")
-            self.assertEqual(report["fold_1"]["observed_iteration"], 6000)
-            self.assertTrue(report["fold_1"]["final_weights_bytes"])
+            self.assertEqual(report["completed"]["1"]["status"], "completed")
+            self.assertEqual(report["completed"]["1"]["observed_iteration"], 6000)
+            self.assertTrue(report["completed"]["1"]["final_weights_bytes"])
             self.assertEqual(set(report["pending"]), {"0", "2", "3", "4"})
             self.assertEqual({path: path.read_bytes() for path in sentinels}, sentinels)
 

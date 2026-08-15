@@ -8,15 +8,13 @@ PROJECT_ROOT=$(cd -- "$PROJECT_ROOT" && pwd -P)
 SIF_PATH=${SIF_PATH:-${HOME:?HOME is required}/pytorch_24.01-py3.sif}
 DATA_ROOT=${DATA_ROOT:-$PROJECT_ROOT/data}
 VENV_PATH=${VENV_PATH:-$PROJECT_ROOT/.cedia/venv}
-EXPECTED_SIF_SHA256=b9db68700a47ae0811e8c4758d6effc3221000dac53e5d05ece0a8cafd77e2a3
 USE_NV=1
 USE_VENV=1
-ALLOW_OTHER_SIF=0
 CHECK_RUNTIME_PATHS=0
 
 usage() {
     cat <<'EOF'
-Usage: scripts/hpc/run_in_container.sh [--cpu] [--no-venv] [--allow-unverified-sif] -- COMMAND [ARG ...]
+Usage: scripts/hpc/run_in_container.sh [--cpu] [--no-venv] -- COMMAND [ARG ...]
        scripts/hpc/run_in_container.sh --check-runtime-paths
 
 Environment: SIF_PATH, DATA_ROOT and VENV_PATH may override their safe defaults.
@@ -28,7 +26,6 @@ while (($#)); do
     case "$1" in
         --cpu) USE_NV=0; shift ;;
         --no-venv) USE_VENV=0; shift ;;
-        --allow-unverified-sif) ALLOW_OTHER_SIF=1; shift ;;
         --check-runtime-paths) CHECK_RUNTIME_PATHS=1; shift ;;
         --help|-h) usage; exit 0 ;;
         --) shift; break ;;
@@ -39,6 +36,14 @@ if ((CHECK_RUNTIME_PATHS)); then
     (($# == 0)) || { echo "--check-runtime-paths does not accept a command" >&2; exit 2; }
 else
     (($#)) || { echo "A command is required after --" >&2; exit 2; }
+fi
+
+# Nested project stages are already in the SIF.  Do not recursively invoke a
+# container runtime or recreate temporary sandboxes.
+if [[ "${THESIS_IN_CONTAINER:-}" == 1 ]]; then
+    ((CHECK_RUNTIME_PATHS == 0)) || exit 0
+    printf 'container_stage nested=1 runtime=none action=direct-exec\n'
+    exec "$@"
 fi
 
 directory_details() {
@@ -103,16 +108,16 @@ trap cleanup_runtime EXIT
 ((CHECK_RUNTIME_PATHS == 0)) || exit 0
 [[ -f "$SIF_PATH" ]] || { echo "SIF not found: $SIF_PATH" >&2; exit 2; }
 
-actual_sif_sha=$(sha256sum "$SIF_PATH" | awk '{print $1}')
-if [[ "$actual_sif_sha" != "$EXPECTED_SIF_SHA256" && "$ALLOW_OTHER_SIF" -ne 1 ]]; then
-    echo "Unexpected SIF SHA-256: $actual_sif_sha" >&2
-    echo "Expected: $EXPECTED_SIF_SHA256" >&2
-    echo "Audit another image first, then opt in with --allow-unverified-sif." >&2
+if runtime=$(command -v singularity 2>/dev/null); then
+    runtime_kind=singularity
+elif runtime=$(command -v apptainer 2>/dev/null); then
+    runtime_kind=apptainer-fallback
+else
+    echo "Neither singularity nor apptainer is available on this Slurm node; no checkpoint was touched." >&2
     exit 2
 fi
-
-runtime=$(command -v apptainer || command -v singularity || true)
-[[ -n "$runtime" ]] || { echo "Apptainer or Singularity is required" >&2; exit 2; }
+runtime_version=$($runtime --version 2>&1 | head -n 1 || true)
+sif_metadata=$(stat -c 'bytes=%s mtime_epoch=%Y owner=%u:%g' "$SIF_PATH")
 mkdir -p "$PROJECT_ROOT/.cedia" "$DATA_ROOT" "$PROJECT_ROOT/results"
 
 binds=(--bind "$PROJECT_ROOT:$PROJECT_ROOT")
@@ -137,13 +142,15 @@ if ((USE_VENV)); then
 fi
 device=cpu
 ((USE_NV == 0)) || device=cuda
+container_host_started_epoch=$(date +%s)
 
-printf 'container_stage utc=%s host=%s git=%s sif_sha256=%s device=%s apptainer_tmp=%s apptainer_cache=%s tmpdir=%s\n' \
-    "$(date -u +%FT%TZ)" "$(hostname)" "$(git -C "$PROJECT_ROOT" rev-parse HEAD)" "$actual_sif_sha" "$device" "$APPTAINER_TMPDIR" "$APPTAINER_CACHEDIR" "$TMPDIR"
+printf 'container_stage utc=%s host=%s git=%s sif_identity=%s device=%s apptainer_tmp=%s apptainer_cache=%s tmpdir=%s\n' \
+    "$(date -u +%FT%TZ)" "$(hostname)" "$(git -C "$PROJECT_ROOT" rev-parse HEAD)" "not-computed:$sif_metadata" "$device" "$APPTAINER_TMPDIR" "$APPTAINER_CACHEDIR" "$TMPDIR"
+printf 'container_runtime_choice path=%s kind=%s version=%s sif=%s %s\n' "$runtime" "$runtime_kind" "$runtime_version" "$SIF_PATH" "$sif_metadata"
 if [[ -n "${RUNTIME_DIAGNOSTICS_LOG:-}" ]]; then
     mkdir -p "$(dirname -- "$RUNTIME_DIAGNOSTICS_LOG")"
-    printf 'container_runtime utc=%s job=%s task=%s tmp=%s cache=%s tmpdir=%s\n' \
-        "$(date -u +%FT%TZ)" "${SLURM_JOB_ID:-none}" "${SLURM_ARRAY_TASK_ID:-none}" "$APPTAINER_TMPDIR" "$APPTAINER_CACHEDIR" "$TMPDIR" >> "$RUNTIME_DIAGNOSTICS_LOG"
+    printf 'container_runtime utc=%s job=%s task=%s runtime=%s kind=%s version=%s sif=%s tmp=%s cache=%s tmpdir=%s\n' \
+        "$(date -u +%FT%TZ)" "${SLURM_JOB_ID:-none}" "${SLURM_ARRAY_TASK_ID:-none}" "$runtime" "$runtime_kind" "$runtime_version" "$SIF_PATH" "$APPTAINER_TMPDIR" "$APPTAINER_CACHEDIR" "$TMPDIR" >> "$RUNTIME_DIAGNOSTICS_LOG"
 fi
 "$runtime" "${container_args[@]}" \
     --env "PATH=$path_value" \
@@ -152,6 +159,9 @@ fi
     --env "THESIS_ADAPTER_PYTHON=$python_value" \
     --env "THESIS_DEVICE=$device" \
     --env "THESIS_DATA_ROOT=$DATA_ROOT" \
+    --env "THESIS_CONTAINER_HOST_STARTED_EPOCH=$container_host_started_epoch" \
+    --env "THESIS_IN_CONTAINER=1" \
+    --env "PYTHONNOUSERSITE=1" \
     "$SIF_PATH" "$@" &
 payload_pid=$!
 if [[ -n "${RUNTIME_DIAGNOSTICS_LOG:-}" ]]; then

@@ -12,6 +12,7 @@ import signal
 import stat
 import struct
 import subprocess
+import time
 from typing import Any
 
 import cv2
@@ -219,6 +220,14 @@ def _log_iteration(log: Path) -> int:
     return max(iterations, default=0)
 
 
+def _log_iteration_tail(log: Path, limit: int = 262144) -> int:
+    """Cheap heartbeat: inspect only the recent Darknet log suffix."""
+    with log.open("rb") as stream:
+        stream.seek(max(0, log.stat().st_size - limit))
+        text = stream.read().decode("utf-8", errors="replace")
+    return max((int(value) for value in re.findall(r"(?m)^(\d+):", text)), default=0)
+
+
 def validate_completed_training(state_path: Path, *, expected_fold: int | None = None) -> dict[str, Any]:
     state = load_json(state_path)
     contract = state.get("contract", {})
@@ -269,12 +278,17 @@ def _resume_checkpoint(path: Path, backup: Path, cfg: Path, contract: dict[str, 
     return iteration
 
 
-def _checkpoint_identity(path: Path, backup: Path, cfg: Path, contract: dict[str, Any]) -> dict[str, Any]:
+def _checkpoint_identity(path: Path, backup: Path, cfg: Path, contract: dict[str, Any], stats: dict[str, Any]) -> dict[str, Any]:
     iteration = _resume_checkpoint(path, backup, cfg, contract)
     _regular_nonempty(path)
+    started = time.monotonic()
+    digest = sha256_file(path)
+    stats["hash_files_count"] += 1
+    stats["hash_bytes_total"] += path.stat().st_size
+    stats["validation_seconds"] += time.monotonic() - started
     return {
         "path": str(path.resolve()), "name": path.name, "bytes": path.stat().st_size,
-        "sha256": sha256_file(path), "iteration": iteration,
+        "sha256": digest, "iteration": iteration,
         "cfg_sha256": contract["cfg_sha256"], "fold": contract["fold"],
     }
 
@@ -286,38 +300,39 @@ def _resume_contract_matches(previous: dict[str, Any] | None, current: dict[str,
     return {key: value for key, value in previous.items() if key != "git_commit"} == {key: value for key, value in current.items() if key != "git_commit"}
 
 
-def _checkpoint_inventory(backup: Path, cfg: Path, contract: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+def _checkpoint_candidates(backup: Path, cfg: Path, contract: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
     valid, rejected = [], []
     for path in sorted(backup.iterdir()):
         if not path.is_file() or not (path.name == f"{cfg.stem}.backup" or re.fullmatch(rf"{re.escape(cfg.stem)}_\d+\.weights", path.name)):
             continue
         try:
-            valid.append(_checkpoint_identity(path, backup, cfg, contract))
+            valid.append({"path": str(path.resolve()), "name": path.name, "bytes": path.stat().st_size, "iteration": _resume_checkpoint(path, backup, cfg, contract)})
         except (OSError, ValueError) as exc:
             rejected.append({"path": str(path.resolve()), "reason": f"{type(exc).__name__}: {exc}"})
     return valid, rejected
 
 
-def _automatic_resume(backup: Path, cfg: Path, contract: dict[str, Any], old_state: dict[str, Any] | None) -> tuple[Path | None, dict[str, Any] | None]:
+def _automatic_resume(backup: Path, cfg: Path, contract: dict[str, Any], old_state: dict[str, Any] | None, stats: dict[str, Any]) -> tuple[Path | None, dict[str, Any] | None, list[dict[str, str]]]:
     candidates = [
         path for path in backup.iterdir()
         if path.is_file() and (path.name == f"{cfg.stem}.backup" or re.fullmatch(rf"{re.escape(cfg.stem)}_\d+\.weights", path.name))
     ]
     if not candidates:
-        return None, None
+        return None, None, []
     if not old_state or not _resume_contract_matches(old_state.get("contract"), contract):
         raise ValueError("Hay checkpoints, pero falta un contrato de entrenamiento compatible")
-    valid, _rejected = _checkpoint_inventory(backup, cfg, contract)
+    valid, rejected = _checkpoint_candidates(backup, cfg, contract)
     if not valid:
         raise ValueError("No existe un checkpoint reanudable válido para este fold/configuración")
-    selected = max(valid, key=lambda item: (int(item["iteration"]), item["name"] == f"{cfg.stem}.backup"))
+    candidate = max(valid, key=lambda item: (int(item["iteration"]), item["name"] == f"{cfg.stem}.backup"))
+    selected = _checkpoint_identity(Path(candidate["path"]), backup, cfg, contract, stats)
     # Schema 2 states from the failed CEDIA run predate inventories.  They are
     # adopted only after their full training contract and the current header,
     # size and digest have been checked; mtime is never used.
     previous = {item.get("path"): item for item in old_state.get("checkpoint_inventory", [])}
     if selected["path"] in previous and previous[selected["path"]] != selected:
         raise ValueError("El checkpoint cambió desde su inventario registrado")
-    return Path(selected["path"]), selected
+    return Path(selected["path"]), selected, rejected
 
 
 def discover_darknet_resume(darknet: Path, data_file: Path, cfg: Path, initial_weights: Path, output: Path, *, fold: int) -> dict[str, Any]:
@@ -327,11 +342,12 @@ def discover_darknet_resume(darknet: Path, data_file: Path, cfg: Path, initial_w
     contract = _training_contract(darknet, data_file, cfg, initial_weights, fold)
     state_path = output / "training_state.json"
     old_state = load_json(state_path) if state_path.is_file() else None
-    checkpoint, identity = _automatic_resume(backup, cfg, contract, old_state)
-    return {"status": old_state.get("status") if old_state else "absent", "fold": fold, "contract": contract, "checkpoint": identity, "resume_weights_path": str(checkpoint) if checkpoint else None}
+    stats = {"hash_files_count": 0, "hash_bytes_total": 0, "validation_seconds": 0.0}
+    checkpoint, identity, rejected = _automatic_resume(backup, cfg, contract, old_state, stats)
+    return {"status": old_state.get("status") if old_state else "absent", "fold": fold, "contract": contract, "checkpoint": identity, "rejected_checkpoints": rejected, "resume_weights_path": str(checkpoint) if checkpoint else None, **stats}
 
 
-def validate_existing_yolo_folds(darknet: Path, manifest_path: Path, folds_path: Path, initial_weights: Path, root: Path) -> dict[str, Any]:
+def validate_existing_yolo_folds(darknet: Path, manifest_path: Path, folds_path: Path, initial_weights: Path, root: Path, expected_pending: set[int] | None = None) -> dict[str, Any]:
     """Read-only gate for a resumed five-fold CEDIA DAG."""
     manifest, folds = load_json(manifest_path), load_json(folds_path)
     entries = folds.get("folds", [])
@@ -339,16 +355,24 @@ def validate_existing_yolo_folds(darknet: Path, manifest_path: Path, folds_path:
         raise ValueError("Se requieren manifest train y exactamente cinco folds")
     if any(set(item.get("train_ids", [])) & set(item.get("validation_ids", [])) for item in entries):
         raise ValueError("Los folds contienen fuga train/validation")
-    fold_one = root / "fold-1"
-    completed = validate_completed_training(fold_one / "training" / "training_state.json", expected_fold=1)
-    pending = {}
-    for fold in (0, 2, 3, 4):
+    completed, pending = {}, {}
+    for fold in range(5):
         fold_root = root / f"fold-{fold}"
+        try:
+            completed[str(fold)] = validate_completed_training(fold_root / "training" / "training_state.json", expected_fold=fold)
+            continue
+        except (KeyError, OSError, ValueError):
+            pass
         report = discover_darknet_resume(darknet, fold_root / "lesion.data", fold_root / "lesion-yolov3.cfg", initial_weights, fold_root / "training", fold=fold)
-        if report["status"] == "completed" or not report["resume_weights_path"]:
+        if not report["resume_weights_path"]:
             raise ValueError(f"Fold {fold} no es pendiente/reanudable de forma segura")
         pending[str(fold)] = report
-    return {"status": "valid", "fold_1": {"status": completed["status"], "observed_iteration": completed["observed_iteration"], "final_weights_path": completed["final_weights_path"], "final_weights_bytes": completed["final_weights_bytes"]}, "pending": pending}
+    if "1" not in completed or int(completed["1"].get("observed_iteration", 0)) != 6000 or completed["1"].get("returncode") != 0:
+        raise ValueError("Fold 1 debe estar completed, returncode=0 y en iteración 6000")
+    detected = {int(item) for item in pending}
+    if expected_pending is not None and detected != expected_pending:
+        raise ValueError(f"Folds pendientes detectados {sorted(detected)} no coinciden con los solicitados {sorted(expected_pending)}")
+    return {"status": "valid", "completed": {fold: {"status": state["status"], "returncode": state.get("returncode"), "observed_iteration": state["observed_iteration"], "final_weights_path": state["final_weights_path"], "final_weights_bytes": state["final_weights_bytes"]} for fold, state in completed.items()}, "pending": pending}
 
 
 def run_darknet_training(darknet: Path, data_file: Path, cfg: Path, initial_weights: Path, output: Path, *, fold: int, resume_weights: Path | None = None) -> dict[str, Any]:
@@ -358,6 +382,7 @@ def run_darknet_training(darknet: Path, data_file: Path, cfg: Path, initial_weig
     output.mkdir(parents=True, exist_ok=True)
     state_path, log = output / "training_state.json", output / "darknet.log"
     contract = _training_contract(darknet, data_file, cfg, initial_weights, fold)
+    stats = {"hash_files_count": 0, "hash_bytes_total": 0, "validation_seconds": 0.0}
     old_state = load_json(state_path) if state_path.is_file() else None
     if resume_weights is None and old_state and old_state.get("status") == "completed" and old_state.get("contract") == contract:
         try:
@@ -366,7 +391,7 @@ def run_darknet_training(darknet: Path, data_file: Path, cfg: Path, initial_weig
             pass
     automatic_identity = None
     if resume_weights is None:
-        resume_weights, automatic_identity = _automatic_resume(backup, cfg, contract, old_state)
+        resume_weights, automatic_identity, _ = _automatic_resume(backup, cfg, contract, old_state, stats)
     if resume_weights:
         if not old_state or not _resume_contract_matches(old_state.get("contract"), contract):
             raise ValueError("La reanudación no coincide con el contrato del fold/configuración")
@@ -392,6 +417,7 @@ def run_darknet_training(darknet: Path, data_file: Path, cfg: Path, initial_weig
         "parent_state_path": str(state_path.resolve()) if old_state else None,
         "parent_contract": old_state.get("contract") if old_state else None,
         "log_path": str(log.resolve()), "attempt_log_path": str(log.resolve()),
+        "last_progress_iteration": resume_iteration, "last_progress_utc": None, "heartbeat_utc": None, **stats,
     }
     atomic_write_json(state_path, state)
     received_signal: list[int] = []
@@ -410,17 +436,31 @@ def run_darknet_training(darknet: Path, data_file: Path, cfg: Path, initial_weig
         for item in handlers: signal.signal(item, on_signal)
         with log.open("wb") as stream:
             process = subprocess.Popen(command, stdout=stream, stderr=subprocess.STDOUT, start_new_session=True)
-            state.update({"darknet_pid": process.pid, "darknet_pgid": process.pid})
+            started_utc = datetime.now(timezone.utc).isoformat()
+            state.update({"darknet_pid": process.pid, "darknet_pgid": process.pid, "darknet_started_utc": started_utc, "last_progress_utc": started_utc, "heartbeat_utc": started_utc})
             atomic_write_json(state_path, state)
-            returncode = process.wait()
+            while True:
+                try:
+                    returncode = process.wait(timeout=30)
+                    break
+                except subprocess.TimeoutExpired:
+                    now = datetime.now(timezone.utc).isoformat()
+                    observed = _log_iteration_tail(log)
+                    state["heartbeat_utc"] = now
+                    if observed > int(state["last_progress_iteration"]):
+                        state.update({"last_progress_iteration": observed, "last_progress_utc": now})
+                    atomic_write_json(state_path, state)
     finally:
         for item, handler in handlers.items(): signal.signal(item, handler)
-    inventory, rejected = _checkpoint_inventory(backup, cfg, contract)
-    state.update({"returncode": returncode, "observed_iteration": _log_iteration(log), "finished_utc": datetime.now(timezone.utc).isoformat(), "checkpoint_inventory": inventory, "rejected_checkpoints": rejected})
+    # A failed process often leaves several 246 MB periodic checkpoints.  Scan
+    # headers only, then hash just the selected parent checkpoint.
+    _resume_candidate, identity, rejected = _automatic_resume(backup, cfg, contract, state, stats)
+    observed_iteration = _log_iteration(log)
+    state.update({"returncode": returncode, "darknet_stopped_utc": datetime.now(timezone.utc).isoformat(), "observed_iteration": observed_iteration, "finished_utc": datetime.now(timezone.utc).isoformat(), "heartbeat_utc": datetime.now(timezone.utc).isoformat(), "last_progress_iteration": max(int(state["last_progress_iteration"]), observed_iteration), "checkpoint_inventory": [identity] if identity else [], "rejected_checkpoints": rejected, **stats})
     try:
         if received_signal or returncode < 0:
             signal_number = received_signal[-1] if received_signal else -returncode
-            state.update({"status": "interrupted", "signal": signal_number, "error": f"Darknet terminó por señal {signal_number}"})
+            state.update({"status": "interrupted", "signal": signal_number, "termination_cause": f"signal-{signal_number}", "error": f"Darknet terminó por señal {signal_number}"})
             atomic_write_json(state_path, state)
             raise DarknetInterrupted(state["error"])
         if returncode:
@@ -432,16 +472,53 @@ def run_darknet_training(darknet: Path, data_file: Path, cfg: Path, initial_weig
             raise RuntimeError(f"Darknet terminó en {state['observed_iteration']} de {contract['max_batches']} iteraciones")
         if darknet_weights_iteration(final_weights, contract["batch"]) < contract["max_batches"]:
             raise RuntimeError("Los pesos finales no alcanzaron max_batches")
-        state.update({"status": "completed", "final_weights_path": str(final_weights.resolve()), "final_weights_bytes": final_weights.stat().st_size, "final_weights_sha256": sha256_file(final_weights)})
+        final_hash_started = time.monotonic()
+        final_hash = sha256_file(final_weights)
+        state.update({"status": "completed", "termination_cause": "max_batches_reached", "final_weights_path": str(final_weights.resolve()), "final_weights_bytes": final_weights.stat().st_size, "final_weights_sha256": final_hash,
+                      "hash_files_count": int(state["hash_files_count"]) + 1, "hash_bytes_total": int(state["hash_bytes_total"]) + final_weights.stat().st_size,
+                      "validation_seconds": float(state["validation_seconds"]) + time.monotonic() - final_hash_started})
         atomic_write_json(state_path, state)
         validate_completed_training(state_path, expected_fold=fold)
         return state
     except DarknetInterrupted:
         raise
     except (KeyError, OSError, ValueError, RuntimeError) as exc:
-        state.update({"status": "failed", "error": f"{type(exc).__name__}: {exc}"})
+        state.update({"status": "failed", "termination_cause": f"{type(exc).__name__}: {exc}", "error": f"{type(exc).__name__}: {exc}"})
         atomic_write_json(state_path, state)
         raise RuntimeError(f"Entrenamiento YOLO inválido; revise {log}: {exc}") from exc
+
+
+def run_darknet_training_with_retries(darknet: Path, data_file: Path, cfg: Path, initial_weights: Path, output: Path, *, fold: int, resume_weights: Path | None = None, max_attempts: int = 1) -> dict[str, Any]:
+    """Retry only an interrupted Darknet child, within one container exec."""
+    if not 1 <= max_attempts <= 3:
+        raise ValueError("max_attempts debe estar entre 1 y 3")
+    started = time.monotonic()
+    try:
+        container_started = float(os.environ.get("THESIS_CONTAINER_HOST_STARTED_EPOCH", time.time()))
+    except ValueError:
+        container_started = time.time()
+    retry_seconds = 0.0
+    for number in range(1, max_attempts + 1):
+        attempt_started = time.monotonic()
+        try:
+            state = run_darknet_training(darknet, data_file, cfg, initial_weights, output, fold=fold, resume_weights=resume_weights)
+            state.update({"training_seconds": time.monotonic() - started, "retry_seconds": retry_seconds,
+                          "container_startup_seconds": max(0.0, time.time() - container_started)})
+            atomic_write_json(output / "training_state.json", state)
+            return state
+        except DarknetInterrupted:
+            retry_seconds += time.monotonic() - attempt_started
+            if number == max_attempts:
+                failed = load_json(output / "training_state.json")
+                failed.update({"training_seconds": time.monotonic() - started, "retry_seconds": retry_seconds,
+                               "container_startup_seconds": max(0.0, time.time() - container_started)})
+                atomic_write_json(output / "training_state.json", failed)
+                raise
+            # The next call re-reads the state and adopts only its selected,
+            # fully hashed compatible checkpoint.  Explicit --resume applies
+            # once; it must not pin a stale parent across retries.
+            resume_weights = None
+    raise AssertionError("unreachable")
 
 
 def validate_frozen_yolo(path: Path, expected_fold: int) -> dict[str, Any]:

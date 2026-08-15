@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 import sys
 
@@ -12,7 +13,18 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from thesis_fitzpatrick.benchmark import atomic_write_json, load_json  # noqa: E402
-from thesis_fitzpatrick.yolo import DarknetInterrupted, collect_raw_validation_detections, discover_darknet_resume, freeze_detector, patch_yolov3_cfg, prepare_darknet_fold, run_darknet_training, select_validation_configuration, validate_existing_yolo_folds, validate_frozen_yolo, validate_frozen_yolo_set  # noqa: E402
+from thesis_fitzpatrick.yolo import DarknetInterrupted, collect_raw_validation_detections, discover_darknet_resume, freeze_detector, patch_yolov3_cfg, prepare_darknet_fold, run_darknet_training_with_retries, select_validation_configuration, validate_existing_yolo_folds, validate_frozen_yolo, validate_frozen_yolo_set  # noqa: E402
+
+
+def runtime_report() -> dict[str, object]:
+    report: dict[str, object] = {"sys_executable": sys.executable, "python": sys.version}
+    try:
+        import torch
+        report.update({"torch": torch.__version__, "cuda_build": torch.version.cuda, "cuda_available": torch.cuda.is_available()})
+        if torch.cuda.is_available(): report["gpu_name"] = torch.cuda.get_device_name(0)
+    except Exception as exc:
+        report["torch_error"] = repr(exc)
+    return report
 
 
 def parse_args() -> argparse.Namespace:
@@ -31,7 +43,7 @@ def parse_args() -> argparse.Namespace:
     train = sub.add_parser("train")
     train.add_argument("--darknet", required=True, type=Path); train.add_argument("--data", required=True, type=Path)
     train.add_argument("--cfg", required=True, type=Path); train.add_argument("--initial-weights", required=True, type=Path)
-    train.add_argument("--fold", required=True, type=int); train.add_argument("--resume", type=Path); train.add_argument("--output", required=True, type=Path); train.add_argument("--confirm-training", action="store_true")
+    train.add_argument("--fold", required=True, type=int); train.add_argument("--resume", type=Path); train.add_argument("--output", required=True, type=Path); train.add_argument("--max-attempts", type=int, default=1); train.add_argument("--manifest", type=Path); train.add_argument("--folds", type=Path); train.add_argument("--confirm-training", action="store_true")
     resume_plan = sub.add_parser("resume-plan", help="Read-only checkpoint compatibility report")
     resume_plan.add_argument("--darknet", required=True, type=Path); resume_plan.add_argument("--data", required=True, type=Path)
     resume_plan.add_argument("--cfg", required=True, type=Path); resume_plan.add_argument("--initial-weights", required=True, type=Path)
@@ -40,6 +52,7 @@ def parse_args() -> argparse.Namespace:
     existing.add_argument("--darknet", required=True, type=Path); existing.add_argument("--manifest", required=True, type=Path)
     existing.add_argument("--folds", required=True, type=Path); existing.add_argument("--initial-weights", required=True, type=Path)
     existing.add_argument("--root", required=True, type=Path)
+    existing.add_argument("--expected-pending", default="")
     freeze = sub.add_parser("freeze")
     freeze.add_argument("--cfg", required=True, type=Path); freeze.add_argument("--weights", required=True, type=Path)
     freeze.add_argument("--validation-report", required=True, type=Path); freeze.add_argument("--confidence", required=True, type=float)
@@ -71,15 +84,31 @@ def main() -> None:
     elif args.action == "train":
         if not args.confirm_training:
             raise SystemExit("Entrenamiento largo bloqueado. Revise recursos/comando y repita con --confirm-training.")
+        if (args.manifest is None) != (args.folds is None):
+            raise SystemExit("--manifest y --folds deben proporcionarse juntos")
+        if args.manifest:
+            manifest, folds = load_json(args.manifest), load_json(args.folds)
+            entry = next((item for item in folds.get("folds", []) if item.get("fold") == args.fold), None)
+            if manifest.get("split") != "train" or entry is None or set(entry.get("train_ids", [])) & set(entry.get("validation_ids", [])):
+                raise SystemExit("Manifest/fold inválido o con fuga")
+        print(json.dumps({"runtime": runtime_report(), "in_container": os.environ.get("THESIS_IN_CONTAINER") == "1"}, sort_keys=True))
         try:
-            print(json.dumps(run_darknet_training(args.darknet, args.data, args.cfg, args.initial_weights, args.output, fold=args.fold, resume_weights=args.resume), indent=2))
+            print(json.dumps(run_darknet_training_with_retries(args.darknet, args.data, args.cfg, args.initial_weights, args.output, fold=args.fold, resume_weights=args.resume, max_attempts=args.max_attempts), indent=2))
         except DarknetInterrupted as exc:
             print(f"YOLO interrupted and checkpoint inventory was recorded: {exc}", file=sys.stderr)
             raise SystemExit(75) from exc
     elif args.action == "resume-plan":
         print(json.dumps(discover_darknet_resume(args.darknet, args.data, args.cfg, args.initial_weights, args.output, fold=args.fold), indent=2))
     elif args.action == "validate-existing":
-        print(json.dumps(validate_existing_yolo_folds(args.darknet, args.manifest, args.folds, args.initial_weights, args.root), indent=2))
+        pending = set()
+        if args.expected_pending:
+            try:
+                pending = {int(value) for value in args.expected_pending.split(",")}
+            except ValueError as exc:
+                raise SystemExit("--expected-pending debe ser una lista de folds 0..4") from exc
+            if not pending <= set(range(5)) or len(pending) != len(args.expected_pending.split(",")):
+                raise SystemExit("--expected-pending debe ser una lista única de folds 0..4")
+        print(json.dumps(validate_existing_yolo_folds(args.darknet, args.manifest, args.folds, args.initial_weights, args.root, expected_pending=pending if args.expected_pending else None), indent=2))
     elif args.action == "validate":
         records = json.loads(args.predictions.read_text(encoding="utf-8"))
         report = select_validation_configuration(records, *[[float(value) for value in getattr(args, name).split(",")] for name in ("confidence_candidates", "nms_candidates", "margin_candidates")])

@@ -17,6 +17,8 @@ FOLDS_FILE=${FOLDS_FILE:-$DATA_ROOT/manifests/isic2018_task1_train_disjoint_fold
 YOLO_ROOT=${YOLO_ROOT:-$PROJECT_ROOT/results/benchmark_v1/yolo}
 DARKNET_BIN=${DARKNET_BIN:-$PROJECT_ROOT/models/yolov3-darknet/source/darknet}
 INITIAL_WEIGHTS=${INITIAL_WEIGHTS:-$PROJECT_ROOT/models/yolov3-darknet/checkpoints/darknet53.conv.74}
+YOLO_EXPECTED_PENDING=${YOLO_EXPECTED_PENDING:-}
+[[ -z "$YOLO_EXPECTED_PENDING" || "$YOLO_EXPECTED_PENDING" =~ ^[0-4](,[0-4])*$ ]] || { echo "YOLO_EXPECTED_PENDING must be a comma-separated fold list" >&2; exit 2; }
 for path in "$PROJECT_ROOT" "$DATA_ROOT" "$SIF_PATH" "$TRAIN_MANIFEST" "$FOLDS_FILE" "$YOLO_ROOT" "$DARKNET_BIN" "$INITIAL_WEIGHTS"; do
     [[ -e "$path" ]] || { echo "Missing read-only validation prerequisite: $path" >&2; exit 2; }
 done
@@ -24,6 +26,7 @@ export PROJECT_ROOT DATA_ROOT SIF_PATH TRAIN_MANIFEST FOLDS_FILE YOLO_ROOT DARKN
 cd "$PROJECT_ROOT"
 echo "job=${SLURM_JOB_ID:-manual} host=$(hostname) utc=$(date -u +%FT%TZ) gpu=none"
 scripts/hpc/run_in_container.sh --check-runtime-paths
+args=(--darknet "$DARKNET_BIN" --manifest "$TRAIN_MANIFEST" --folds "$FOLDS_FILE" --initial-weights "$INITIAL_WEIGHTS" --root "$YOLO_ROOT")
+[[ -z "$YOLO_EXPECTED_PENDING" ]] || args+=(--expected-pending "$YOLO_EXPECTED_PENDING")
 exec scripts/hpc/run_in_container.sh --cpu -- python scripts/benchmark/yolov3.py validate-existing \
-    --darknet "$DARKNET_BIN" --manifest "$TRAIN_MANIFEST" --folds "$FOLDS_FILE" \
-    --initial-weights "$INITIAL_WEIGHTS" --root "$YOLO_ROOT"
+    "${args[@]}"

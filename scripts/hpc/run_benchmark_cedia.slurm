@@ -35,43 +35,37 @@ RUN_ROOT=$ARTIFACT_ROOT/runs/$RUN_ID
 for path in "$PROJECT_ROOT" "$DATA_ROOT" "$DEVELOPMENT_MANIFEST" "$BENCHMARK_CONFIG" "$PROJECT_ROOT/.cedia/venv/bin/python"; do
     [[ -e "$path" ]] || { echo "Missing prerequisite: $path" >&2; exit 2; }
 done
-scripts/hpc/run_in_container.sh --cpu -- python - "$DEVELOPMENT_MANIFEST" <<'PY'
-import json, pathlib, sys
-p = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
-if p.get("split") == "test": raise SystemExit("Full development benchmark refuses sealed test")
-if not p.get("items"): raise SystemExit("Development manifest is empty")
-print(f"validated dataset={p.get('dataset_id')} split={p.get('split')} images={len(p['items'])}")
-PY
-if [[ -f "$RUN_ROOT/run_manifest.json" ]]; then
-    if scripts/hpc/run_in_container.sh --cpu -- python - "$RUN_ROOT/run_manifest.json" <<'PY'
-import json, pathlib, sys
-status = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")).get("status")
-sys.exit(0 if status == "completed" else 3)
-PY
-    then
-        echo "Run already completed and will not be repeated: $RUN_ID"
-        exit 0
-    else
-        state_rc=$?
-        [[ "$state_rc" == 3 ]] || { echo "Cannot validate existing run manifest: $RUN_ROOT/run_manifest.json" >&2; exit "$state_rc"; }
-        echo "Incomplete run exists at $RUN_ROOT; inspect it before choosing a new RUN_PREFIX" >&2
-        exit 2
-    fi
-fi
-
 echo "job=$SLURM_JOB_ID task=$TASK stage=$STAGE host=$(hostname) utc=$(date -u +%FT%TZ) git=$(git -C "$PROJECT_ROOT" rev-parse HEAD)"
 echo "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-unset} warmup=$WARMUP repetitions=$REPETITIONS"
 nvidia-smi
 export DATA_ROOT SIF_PATH=${SIF_PATH:-$HOME/pytorch_24.01-py3.sif} THESIS_DEVICE=cuda
 cd "$PROJECT_ROOT"
-scripts/hpc/run_in_container.sh -- python scripts/benchmark/yolov3.py validate-folds --root "$YOLO_FROZEN_ROOT"
-if [[ "$STAGE" == A || "$STAGE" == B1 ]]; then
-    command=(python scripts/benchmark/run_evaluation.py --evaluation "$STAGE" --dataset isic2018_task1 --split validation
-        --models all --manifest "$DEVELOPMENT_MANIFEST" --data-root "$DATA_ROOT" --config "$BENCHMARK_CONFIG"
-        --artifact-root "$ARTIFACT_ROOT" --run-id "$RUN_ID" --warmup "$WARMUP" --repetitions "$REPETITIONS" --reuse-p0-cache --confirm-run)
-else
-    command=(python scripts/benchmark/run_ablation.py --conditions "$STAGE" --dataset isic2018_task1 --split validation
-        --models all --manifest "$DEVELOPMENT_MANIFEST" --data-root "$DATA_ROOT" --config "$BENCHMARK_CONFIG"
-        --artifact-root "$ARTIFACT_ROOT" --run-id "$RUN_ID" --warmup "$WARMUP" --repetitions "$REPETITIONS" --reuse-p0-cache --confirm-run)
+# Keep manifest/idempotency/fold checks and the actual benchmark in one SIF.
+# This removes three CPU-only image startups from each benchmark array task.
+exec scripts/hpc/run_in_container.sh -- bash -c '
+set -Eeuo pipefail
+python - "$1" "$2" <<'"'"'PY'"'"'
+import json, pathlib, sys
+manifest = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+if manifest.get("split") == "test": raise SystemExit("Full development benchmark refuses sealed test")
+if not manifest.get("items"): raise SystemExit("Development manifest is empty")
+run = pathlib.Path(sys.argv[2])
+if run.is_file():
+    status = json.loads(run.read_text(encoding="utf-8")).get("status")
+    if status == "completed":
+        print("Run already completed and will not be repeated")
+        raise SystemExit(0)
+    raise SystemExit("Incomplete run exists; inspect it before choosing a new RUN_PREFIX")
+print(f"validated dataset={manifest.get('dataset_id')} split={manifest.get('split')} images={len(manifest['items'])}")
+PY
+python scripts/benchmark/yolov3.py validate-folds --root "$3"
+if [[ "$4" == A || "$4" == B1 ]]; then
+  exec python scripts/benchmark/run_evaluation.py --evaluation "$4" --dataset isic2018_task1 --split validation \
+    --models all --manifest "$1" --data-root "$5" --config "$6" --artifact-root "$7" --run-id "$8" \
+    --warmup "$9" --repetitions "${10}" --reuse-p0-cache --confirm-run
 fi
-exec scripts/hpc/run_in_container.sh -- "${command[@]}"
+exec python scripts/benchmark/run_ablation.py --conditions "$4" --dataset isic2018_task1 --split validation \
+  --models all --manifest "$1" --data-root "$5" --config "$6" --artifact-root "$7" --run-id "$8" \
+  --warmup "$9" --repetitions "${10}" --reuse-p0-cache --confirm-run
+' _ "$DEVELOPMENT_MANIFEST" "$RUN_ROOT/run_manifest.json" "$YOLO_FROZEN_ROOT" "$STAGE" "$DATA_ROOT" \
+    "$BENCHMARK_CONFIG" "$ARTIFACT_ROOT" "$RUN_ID" "$WARMUP" "$REPETITIONS"

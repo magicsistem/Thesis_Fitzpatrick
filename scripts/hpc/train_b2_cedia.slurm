@@ -55,22 +55,6 @@ echo "host=$(hostname) utc=$(date -u +%FT%TZ) python=$python_bin git_head=$(git 
 echo "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-unset}"
 command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi || true
 
-"$PROJECT_ROOT/scripts/hpc/run_in_container.sh" --cpu -- python - "$TRAIN_MANIFEST" "$FOLDS_FILE" "$P0_ROOT/oof_manifest.json" <<'PY'
-import json, pathlib, sys
-
-manifest_path, folds_path, p0_manifest_path = map(pathlib.Path, sys.argv[1:])
-manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-folds = json.loads(folds_path.read_text(encoding="utf-8"))
-if manifest.get("split") != "train": raise SystemExit("B2 requires split=train; sealed test is forbidden")
-if len(folds.get("folds", [])) != 5: raise SystemExit("B2 requires exactly five folds")
-if json.loads(p0_manifest_path.read_text(encoding="utf-8")).get("status") != "completed": raise SystemExit("B2 requires completed leakage-safe OOF P0")
-for fold in folds["folds"]:
-    if set(fold["train_ids"]) & set(fold["validation_ids"]): raise SystemExit("Fold leakage detected")
-print("validated train-only folds and five frozen YOLO detectors")
-PY
-"$PROJECT_ROOT/scripts/hpc/run_in_container.sh" -- "$python_bin" scripts/benchmark/yolov3.py validate-folds --root "$YOLO_FROZEN_ROOT"
-
-resume=(--resume-if-valid)
 cd "$PROJECT_ROOT"
 source scripts/hpc/runtime_diagnostics.sh
 child=""; child_pgid=""
@@ -87,10 +71,29 @@ trap 'runtime_diag_stop' EXIT
 export DATA_ROOT SIF_PATH VENV_PATH=${VENV_PATH:-$PROJECT_ROOT/.cedia/venv}
 RUNTIME_DIAGNOSTICS_LOG="$PROJECT_ROOT/.cedia/diagnostics/b2-${SLURM_JOB_ID:-manual}-$METHOD_ID-fold-$FOLD.log"
 export RUNTIME_DIAGNOSTICS_LOG
-setsid "$PROJECT_ROOT/scripts/hpc/run_in_container.sh" -- "$python_bin" scripts/benchmark/train_backend.py \
-    --method "$METHOD_ID" --manifest "$TRAIN_MANIFEST" --data-root "$DATA_ROOT" \
-    --folds "$FOLDS_FILE" --fold "$FOLD" --p0-root "$P0_ROOT" --output "$OUTPUT" \
-    --epochs "$EPOCHS" --seed "$SEED" --device cuda "${resume[@]}" --confirm-training &
+# One SIF invocation contains every Python precondition and the resumable
+# training payload.  Do not pay a second image startup merely to validate it.
+setsid "$PROJECT_ROOT/scripts/hpc/run_in_container.sh" -- bash -c '
+set -Eeuo pipefail
+python - "$1" "$2" "$3" <<'"'"'PY'"'"'
+import json, pathlib, sys
+manifest_path, folds_path, p0_manifest_path = map(pathlib.Path, sys.argv[1:])
+manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+folds = json.loads(folds_path.read_text(encoding="utf-8"))
+if manifest.get("split") != "train": raise SystemExit("B2 requires split=train; sealed test is forbidden")
+if len(folds.get("folds", [])) != 5: raise SystemExit("B2 requires exactly five folds")
+if json.loads(p0_manifest_path.read_text(encoding="utf-8")).get("status") != "completed": raise SystemExit("B2 requires completed leakage-safe OOF P0")
+for fold in folds["folds"]:
+    if set(fold["train_ids"]) & set(fold["validation_ids"]): raise SystemExit("Fold leakage detected")
+print("validated train-only folds and five frozen YOLO detectors")
+PY
+"$4" scripts/benchmark/yolov3.py validate-folds --root "$5"
+exec "$4" scripts/benchmark/train_backend.py \
+  --method "$6" --manifest "$1" --data-root "$7" --folds "$2" --fold "$8" \
+  --p0-root "$3" --output "$9" --epochs "${10}" --seed "${11}" --device cuda \
+  --resume-if-valid --confirm-training
+' _ "$TRAIN_MANIFEST" "$FOLDS_FILE" "$P0_ROOT/oof_manifest.json" "$python_bin" "$YOLO_FROZEN_ROOT" \
+    "$METHOD_ID" "$DATA_ROOT" "$FOLD" "$OUTPUT" "$EPOCHS" "$SEED" &
 child=$!
 child_pgid=$child
 set +e; wait "$child"; rc=$?; set -e

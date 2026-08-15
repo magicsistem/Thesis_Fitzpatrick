@@ -14,8 +14,9 @@ cd "$PROJECT_ROOT"
 scripts/hpc/run_in_container.sh --check-runtime-paths
 # Project Python must never run on the login-node interpreter: CEDIA's host
 # Python is older than this repository's supported syntax.  This is a
-# read-only resource contract check, not bootstrap or dataset preparation.
-scripts/hpc/run_in_container.sh --cpu -- python scripts/hpc/bootstrap_resources.py --require-sources --require-checkpoints
+# The resume plan validates the concrete Darknet, cfg, data and initial-weights
+# contract.  Do not call bootstrap_resources here: this command is deliberately
+# a read-only inspection after the expensive preflight has already succeeded.
 scripts/hpc/run_in_container.sh --cpu -- python scripts/benchmark/yolov3.py resume-plan \
   --darknet "$DARKNET_BIN" --data "$YOLO_ROOT/fold-$FOLD/lesion.data" --cfg "$YOLO_ROOT/fold-$FOLD/lesion-yolov3.cfg" \
   --initial-weights "$INITIAL_WEIGHTS" --fold "$FOLD" --output "$YOLO_ROOT/fold-$FOLD/training"
