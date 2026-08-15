@@ -143,10 +143,7 @@ class OpenCVYoloV3Detector:
             self.network.setPreferableBackend(cv2.dnn.DNN_BACKEND_CUDA)
             self.network.setPreferableTarget(cv2.dnn.DNN_TARGET_CUDA)
             self.execution_device = "cuda"
-
-    @property
-    def identity(self) -> dict[str, Any]:
-        return {
+        self._identity = {
             "architecture": "YOLOv3-Darknet53",
             "cfg_sha256": sha256_file(self.cfg_path),
             "weights_sha256": sha256_file(self.weights_path),
@@ -156,6 +153,10 @@ class OpenCVYoloV3Detector:
             "margin_fraction": self.margin_fraction,
             "execution_device": self.execution_device,
         }
+
+    @property
+    def identity(self) -> dict[str, Any]:
+        return self._identity
 
     def detect(self, rgb: np.ndarray) -> list[Detection]:
         height, width = rgb.shape[:2]
@@ -468,41 +469,46 @@ def atomic_write_png(path: Path, array: np.ndarray) -> None:
 
 def _load_cached(image: ImageInput, directory: Path) -> P0Result | None:
     manifest_path = directory / "preprocessing_manifest.json"
-    required = ["fov_mask.png", "hair_mask.png", "segmentation_input.png", "roi_input.png", "roi_fov_mask.png"]
+    required = ["fov_mask.png", "hair_mask.png", "segmentation_input.png", "roi_input.png", "roi_fov_mask.png", "yolo_overlay.png", "yolo_bbox.json"]
     if not manifest_path.is_file() or any(not (directory / name).is_file() for name in required):
         return None
-    manifest = load_json(manifest_path)
-    if manifest.get("status") != "completed":
+    try:
+        manifest = load_json(manifest_path)
+        if manifest.get("status") != "completed" or manifest.get("cache_key") != directory.name or manifest.get("image_id") != image.image_id:
+            return None
+        arrays = {name: cv2.imread(str(directory / name), cv2.IMREAD_UNCHANGED) for name in required if name.endswith(".png")}
+        if any(value is None for value in arrays.values()):
+            return None
+        if load_json(directory / "yolo_bbox.json").get("image_id") != image.image_id:
+            return None
+        selected = manifest.get("selected_bbox_original")
+        expanded = BBox.from_list(manifest["expanded_bbox_original"])
+        detections = [Detection(BBox.from_list(item["bbox_xyxy_original"]), float(item["confidence"]), item["class_name"]) for item in manifest["detections"]]
+        return P0Result(
+            image=image,
+            fov_mask=(arrays["fov_mask.png"] > 0).astype(np.uint8),
+            hair_mask=(arrays["hair_mask.png"] > 0).astype(np.uint8),
+            segmentation_input=cv2.cvtColor(arrays["segmentation_input.png"], cv2.COLOR_BGR2RGB),
+            detections=detections,
+            selected_bbox_original=BBox.from_list(selected) if selected else None,
+            expanded_bbox_original=expanded,
+            roi_input=cv2.cvtColor(arrays["roi_input.png"], cv2.COLOR_BGR2RGB),
+            roi_fov_mask=(arrays["roi_fov_mask.png"] > 0).astype(np.uint8),
+            transform=CoordinateTransform(image.original_size[0], image.original_size[1], expanded),
+            detector_failed=bool(manifest["detector_failed"]),
+            detector_status=str(manifest.get("detector_status", "configured_no_detection" if manifest["detector_failed"] else "configured_success")),
+            fallback_used=bool(manifest["fallback_used"]),
+            timings_ms={key: float(value) for key, value in manifest["timings_ms"].items()},
+            warnings=list(manifest["warnings"]),
+            configuration_hash=str(manifest["configuration_hash"]),
+            cache_key=str(manifest["cache_key"]),
+            stages={key: bool(value) for key, value in manifest.get("stages", {"fov": True, "hair": True, "yolo": True}).items()},
+            stage_details=dict(manifest.get("stage_details", {})),
+            cache_hit=True,
+            cache_directory=directory,
+        )
+    except (KeyError, OSError, TypeError, ValueError):
         return None
-    arrays = {name: cv2.imread(str(directory / name), cv2.IMREAD_UNCHANGED) for name in required}
-    if any(value is None for value in arrays.values()):
-        return None
-    selected = manifest.get("selected_bbox_original")
-    expanded = BBox.from_list(manifest["expanded_bbox_original"])
-    detections = [Detection(BBox.from_list(item["bbox_xyxy_original"]), float(item["confidence"]), item["class_name"]) for item in manifest["detections"]]
-    return P0Result(
-        image=image,
-        fov_mask=(arrays["fov_mask.png"] > 0).astype(np.uint8),
-        hair_mask=(arrays["hair_mask.png"] > 0).astype(np.uint8),
-        segmentation_input=cv2.cvtColor(arrays["segmentation_input.png"], cv2.COLOR_BGR2RGB),
-        detections=detections,
-        selected_bbox_original=BBox.from_list(selected) if selected else None,
-        expanded_bbox_original=expanded,
-        roi_input=cv2.cvtColor(arrays["roi_input.png"], cv2.COLOR_BGR2RGB),
-        roi_fov_mask=(arrays["roi_fov_mask.png"] > 0).astype(np.uint8),
-        transform=CoordinateTransform(image.original_size[0], image.original_size[1], expanded),
-        detector_failed=bool(manifest["detector_failed"]),
-        detector_status=str(manifest.get("detector_status", "configured_no_detection" if manifest["detector_failed"] else "configured_success")),
-        fallback_used=bool(manifest["fallback_used"]),
-        timings_ms={key: float(value) for key, value in manifest["timings_ms"].items()},
-        warnings=list(manifest["warnings"]),
-        configuration_hash=str(manifest["configuration_hash"]),
-        cache_key=str(manifest["cache_key"]),
-        stages={key: bool(value) for key, value in manifest.get("stages", {"fov": True, "hair": True, "yolo": True}).items()},
-        stage_details=dict(manifest.get("stage_details", {})),
-        cache_hit=True,
-        cache_directory=directory,
-    )
 
 
 def run_p0(

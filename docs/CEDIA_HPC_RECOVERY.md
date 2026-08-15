@@ -144,6 +144,18 @@ sólo el módulo oficial que muestre CEDIA.
    75 metadata/checkpoints; y antes de benchmark si la configuración o los
    cinco `frozen.json` no validan.
 
+## P0 OOF paralelo
+
+P0 usa 24 procesos `spawn` cuando Slurm asigna 32 CPU. Cada proceso limita
+OpenCV/BLAS a un hilo y crea una sola instancia CPU de su detector YOLO
+congelado para el fold que procesa; no comparte `cv2.dnn.Net` ni usa CUDA de
+OpenCV. Antes de crear pools comprueba que los cinco folds asignan una vez y
+sólo una vez cada imagen de `train`. `--reuse-cache` conserva los directorios
+completos existentes: el manifiesto de cada imagen se publica después de sus
+artefactos mediante escrituras atómicas, y un directorio parcial se recalcula.
+El `oof_manifest.json` normal sólo se publica al finalizar el conjunto completo
+sin fallos.
+
 ## Límite de entrenamiento y diagnóstico de terminación
 
 El límite metodológico efectivo es `max_batches=6000` (con pasos 4800 y 5400).

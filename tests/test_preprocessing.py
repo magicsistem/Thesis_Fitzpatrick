@@ -9,6 +9,7 @@ import unittest
 
 import cv2
 import numpy as np
+from PIL import Image
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -25,6 +26,7 @@ from thesis_fitzpatrick.preprocessing import (  # noqa: E402
     expand_bbox,
     run_p0,
 )
+from scripts.benchmark import prepare_p0_oof as p0_oof  # noqa: E402
 
 
 CONFIG = json.loads((REPO_ROOT / "configs" / "benchmark" / "default.json").read_text())
@@ -163,6 +165,52 @@ class CoordinateAndP0Tests(unittest.TestCase):
             self.assertEqual(first.roi_input.shape, second.roi_input.shape)
             self.assertIn("parameters", second.stage_details["fov"])
             self.assertIn("detector_identity", second.stage_details["yolo"])
+            (first.cache_directory / "yolo_overlay.png").unlink()
+            rebuilt = run_p0(image, CONFIG, detector, cache_root=Path(directory))
+            self.assertFalse(rebuilt.cache_hit)
+            self.assertEqual(detector.calls, 2)
+            (rebuilt.cache_directory / "yolo_bbox.json").write_text("not json", encoding="utf-8")
+            repaired = run_p0(image, CONFIG, detector, cache_root=Path(directory))
+            self.assertFalse(repaired.cache_hit)
+            self.assertEqual(detector.calls, 3)
+
+    def test_oof_workers_validate_structure_and_process_each_image_once(self) -> None:
+        self.assertEqual(p0_oof.resolve_workers(None, 32), 24)
+        with self.assertRaisesRegex(ValueError, "1 y 32"):
+            p0_oof.resolve_workers(33, 32)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); data = root / "data"; data.mkdir(); yolo = root / "yolo"
+            items = []
+            for index in range(5):
+                image_id = f"image-{index}"
+                Image.fromarray(np.full((40, 60, 3), 120 + index, dtype=np.uint8)).save(data / f"{image_id}.png")
+                items.append({"image_id": image_id, "image_path": f"{image_id}.png"})
+                frozen = yolo / f"fold-{index}"; frozen.mkdir(parents=True)
+                (frozen / "frozen.json").write_text(json.dumps({"status": "frozen", "fold": index}), encoding="utf-8")
+            manifest = {"items": items}
+            folds = {"folds": [{"fold": index, "validation_ids": [f"image-{index}"]} for index in range(5)]}
+            by_id, plan = p0_oof.validate_oof_structure(manifest, folds, yolo)
+            self.assertEqual({fold for fold, _ in plan}, set(range(5)))
+            self.assertEqual(p0_oof.fold_config(CONFIG, yolo, 3)["p0"]["yolo"]["frozen_manifest"], str((yolo / "fold-3" / "frozen.json").resolve()))
+            config = copy.deepcopy(CONFIG)
+            ids = [f"image-{index}" for index in range(5)]
+            outcome = p0_oof.process_fold(0, ids, by_id, config, data_root=data, artifact_root=root / "parallel", dataset_id="synthetic", workers=2, reuse_cache=True)
+            sequential_detector = detector_from_config(config, REPO_ROOT)
+            with Image.open(data / "image-0.png") as opened:
+                sequential = run_p0(ImageInput("image-0", "synthetic", "train_oof", np.asarray(opened.convert("RGB"), dtype=np.uint8)), config, sequential_detector, cache_root=root / "sequential", reuse_cache=True)
+            self.assertEqual({item["image_id"] for item in outcome}, set(ids))
+            self.assertTrue(all("error" not in item and not item["cache_hit"] for item in outcome))
+            self.assertEqual(next(item for item in outcome if item["image_id"] == "image-0")["cache_key"], sequential.cache_key)
+            repeated = p0_oof.process_fold(0, ids, by_id, config, data_root=data, artifact_root=root / "parallel", dataset_id="synthetic", workers=2, reuse_cache=True)
+            self.assertTrue(all(item["cache_hit"] for item in repeated))
+            failed = p0_oof.process_fold(0, ["missing"], {**by_id, "missing": {"image_id": "missing", "image_path": "missing.png"}}, config, data_root=data, artifact_root=root / "parallel", dataset_id="synthetic", workers=1, reuse_cache=True)
+            self.assertIn("error", failed[0])
+            bad = {"folds": [{"fold": 0, "validation_ids": ["image-0", "image-1"]}, *[{"fold": index, "validation_ids": [f"image-{index}"]} for index in range(1, 5)] ]}
+            with self.assertRaisesRegex(ValueError, "duplicate"):
+                p0_oof.validate_oof_structure(manifest, bad, yolo)
+            self.assertEqual(p0_oof.completion_status(5, 5, []), "completed")
+            self.assertEqual(p0_oof.completion_status(4, 5, []), "failed")
+            self.assertEqual(p0_oof.completion_status(5, 5, [{"error": "x"}]), "failed")
 
     def test_missing_yolo_uses_full_fov_fallback(self) -> None:
         rgb = np.full((80, 100, 3), 120, dtype=np.uint8)

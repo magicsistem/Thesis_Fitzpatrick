@@ -128,6 +128,10 @@ fi
 container_args=(exec)
 ((USE_NV == 0)) || container_args+=(--nv)
 container_args+=("${binds[@]}" --pwd "$PROJECT_ROOT")
+thread_env=()
+for name in OMP_NUM_THREADS OPENBLAS_NUM_THREADS MKL_NUM_THREADS NUMEXPR_NUM_THREADS VECLIB_MAXIMUM_THREADS BLIS_NUM_THREADS; do
+    thread_env+=(--env "$name=${!name:-1}")
+done
 
 path_value=$PATH
 python_value=python3
@@ -162,6 +166,7 @@ fi
     --env "THESIS_CONTAINER_HOST_STARTED_EPOCH=$container_host_started_epoch" \
     --env "THESIS_IN_CONTAINER=1" \
     --env "PYTHONNOUSERSITE=1" \
+    "${thread_env[@]}" \
     "$SIF_PATH" "$@" &
 payload_pid=$!
 if [[ -n "${RUNTIME_DIAGNOSTICS_LOG:-}" ]]; then
