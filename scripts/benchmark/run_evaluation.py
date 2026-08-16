@@ -39,7 +39,7 @@ from thesis_fitzpatrick.benchmark import (  # noqa: E402
     validate_dataset_registry,
 )
 from thesis_fitzpatrick.grabcut import common_postprocess, grabcut_classic, grabcut_robust  # noqa: E402
-from thesis_fitzpatrick.masks import build_clean_skin_mask, measure_skin_colour  # noqa: E402
+from thesis_fitzpatrick.masks import build_clean_skin_mask, measure_skin_colour, prepare_clean_skin_context  # noqa: E402
 from thesis_fitzpatrick.metrics import segmentation_metrics  # noqa: E402
 from thesis_fitzpatrick.preprocessing import atomic_write_png, detector_from_config, run_p0  # noqa: E402
 from thesis_fitzpatrick.reporting import write_report  # noqa: E402
@@ -395,6 +395,7 @@ def main() -> None:
                 ground_truth=ground_truth, ground_truth_allowed=ground_truth is not None,
                 metadata={key: value for key, value in item.items() if key not in {"image_path", "mask_paths"}},
             )
+            clean_skin_context = prepare_clean_skin_context(Image.fromarray(rgb, mode="RGB"))
             p0 = run_p0(
                 image, config, detector, cache_root=artifact_root / "preprocessing", reuse_cache=args.reuse_p0_cache
             ) if args.evaluation in {"B1", "B2"} else None
@@ -434,7 +435,7 @@ def main() -> None:
                     )
                 post_time = (time.perf_counter() - post_started) * 1000
                 atomic_write_png(prediction_directory / "final_mask.png", final * 255)
-                clean_skin, clean_skin_metadata = build_clean_skin_mask(Image.fromarray(rgb, mode="RGB"), final)
+                clean_skin, clean_skin_metadata = build_clean_skin_mask(Image.fromarray(rgb, mode="RGB"), final, context=clean_skin_context)
                 if p0 is not None:
                     clean_skin &= p0.fov_mask.astype(bool)
                     clean_skin &= ~p0.hair_mask.astype(bool)

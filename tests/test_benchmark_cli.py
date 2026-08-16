@@ -16,6 +16,14 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 class BenchmarkCliTests(unittest.TestCase):
+    def test_clean_skin_context_is_prepared_once_before_method_loop(self) -> None:
+        source = (REPO_ROOT / "scripts/benchmark/run_evaluation.py").read_text(encoding="utf-8")
+        preparation = source.index("clean_skin_context = prepare_clean_skin_context")
+        method_loop = source.index("for method in methods:", preparation)
+        self.assertLess(preparation, method_loop)
+        self.assertEqual(source.count("clean_skin_context = prepare_clean_skin_context"), 1)
+        self.assertIn("context=clean_skin_context", source)
+
     def test_s16_native_manifest_run_exports_prediction_and_metrics(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

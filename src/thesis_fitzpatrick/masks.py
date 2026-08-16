@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+import cv2
 import numpy as np
 from PIL import Image, ImageFilter
 
@@ -20,6 +21,19 @@ class SkinColorStats:
 
     def to_dict(self) -> dict:
         return asdict(self)
+
+
+@dataclass(frozen=True)
+class CleanSkinContext:
+    rgb: np.ndarray
+    gray: np.ndarray
+    valid_fov: np.ndarray
+    highlight: np.ndarray
+    hair: np.ndarray
+    width: int
+    height: int
+    margin: int
+    outer_radius: int
 
 
 def _odd_size(radius: int) -> int:
@@ -55,58 +69,71 @@ def normalize_binary_mask(mask: Image.Image, size: tuple[int, int]) -> np.ndarra
     return np.asarray(gray, dtype=np.uint8) >= 128
 
 
+def prepare_clean_skin_context(
+    image: Image.Image,
+    *,
+    lesion_margin_fraction: float = 0.015,
+    ring_radius_fraction: float = 0.22,
+) -> CleanSkinContext:
+    rgb = np.asarray(image.convert("RGB"), dtype=np.uint8)
+    height, width = rgb.shape[:2]
+    short_side = min(width, height)
+    margin = max(3, round(short_side * lesion_margin_fraction))
+    outer_radius = max(margin + 3, round(short_side * ring_radius_fraction))
+    maximum = rgb.max(axis=2)
+    minimum = rgb.min(axis=2)
+    gray = np.asarray(image.convert("L"), dtype=np.uint8)
+    valid_fov = maximum > 8
+    highlight = (maximum >= 248) & ((maximum - minimum) <= 22)
+    highlight = _dilate(highlight, max(1, margin // 2))
+    local_max = cv2.dilate(
+        gray,
+        np.ones((_odd_size(max(2, margin)), _odd_size(max(2, margin))), dtype=np.uint8),
+        borderType=cv2.BORDER_CONSTANT,
+        borderValue=0,
+    )
+    hair = ((local_max.astype(np.int16) - gray.astype(np.int16)) >= 45) & (gray <= 135)
+    hair = _dilate(hair, max(1, margin // 3))
+    return CleanSkinContext(rgb, gray, valid_fov, highlight, hair, width, height, margin, outer_radius)
+
+
 def build_clean_skin_mask(
     image: Image.Image,
     lesion_mask: np.ndarray,
     *,
     lesion_margin_fraction: float = 0.015,
     ring_radius_fraction: float = 0.22,
+    context: CleanSkinContext | None = None,
 ) -> tuple[np.ndarray, dict]:
     """Return nearby skin while excluding lesion, borders, hair and highlights.
 
     The output is a conservative candidate mask for manual review, not a
     dermatological ground truth mask.
     """
-    rgb = np.asarray(image.convert("RGB"), dtype=np.uint8)
-    height, width = rgb.shape[:2]
-    short_side = min(width, height)
-    margin = max(3, round(short_side * lesion_margin_fraction))
-    outer_radius = max(margin + 3, round(short_side * ring_radius_fraction))
-
+    if context is None:
+        context = prepare_clean_skin_context(
+            image,
+            lesion_margin_fraction=lesion_margin_fraction,
+            ring_radius_fraction=ring_radius_fraction,
+        )
+    expected_margin = max(3, round(min(context.width, context.height) * lesion_margin_fraction))
+    expected_outer = max(expected_margin + 3, round(min(context.width, context.height) * ring_radius_fraction))
+    if (context.margin, context.outer_radius) != (expected_margin, expected_outer):
+        raise ValueError("CleanSkinContext parameters do not match this call")
     lesion = lesion_mask.astype(bool)
-    lesion_exclusion = _dilate(lesion, margin)
-    local_ring = _dilate(lesion, outer_radius) & ~lesion_exclusion
+    lesion_exclusion = _dilate(lesion, context.margin)
+    local_ring = _dilate(lesion, context.outer_radius) & ~lesion_exclusion
+    clean = local_ring & context.valid_fov & ~context.highlight & ~context.hair
 
-    maximum = rgb.max(axis=2)
-    minimum = rgb.min(axis=2)
-    gray = np.asarray(image.convert("L"), dtype=np.uint8)
-
-    # Conservative field-of-view rule: removes black dermatoscope/background
-    # pixels without imposing a light-skin assumption.
-    valid_fov = maximum > 8
-
-    # Very bright, nearly neutral pixels are usually specular highlights.
-    highlight = (maximum >= 248) & ((maximum - minimum) <= 22)
-    highlight = _dilate(highlight, max(1, margin // 2))
-
-    # Hair is approximated as a narrow local dark structure. The threshold is
-    # relative to the local maximum, which is safer than a fixed skin value.
-    local_max = np.asarray(
-        Image.fromarray(gray, mode="L").filter(ImageFilter.MaxFilter(_odd_size(max(2, margin))))
-    )
-    hair = ((local_max.astype(np.int16) - gray.astype(np.int16)) >= 45) & (gray <= 135)
-    hair = _dilate(hair, max(1, margin // 3))
-
-    clean = local_ring & valid_fov & ~highlight & ~hair
-    minimum_pixels = max(256, round(width * height * 0.005))
+    minimum_pixels = max(256, round(context.width * context.height * 0.005))
     fallback_used = False
     if int(clean.sum()) < minimum_pixels:
-        clean = valid_fov & ~lesion_exclusion & ~highlight & ~hair
+        clean = context.valid_fov & ~lesion_exclusion & ~context.highlight & ~context.hair
         fallback_used = True
 
     metadata = {
-        "lesion_margin_pixels": margin,
-        "ring_radius_pixels": outer_radius,
+        "lesion_margin_pixels": context.margin,
+        "ring_radius_pixels": context.outer_radius,
         "fallback_to_full_complement": fallback_used,
         "candidate_skin_pixels": int(clean.sum()),
     }
