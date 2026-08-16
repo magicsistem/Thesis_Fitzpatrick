@@ -39,6 +39,7 @@ from thesis_fitzpatrick.benchmark import (  # noqa: E402
     validate_dataset_registry,
 )
 from thesis_fitzpatrick.grabcut import common_postprocess, grabcut_classic, grabcut_robust  # noqa: E402
+from thesis_fitzpatrick.masks import build_clean_skin_mask, measure_skin_colour  # noqa: E402
 from thesis_fitzpatrick.metrics import segmentation_metrics  # noqa: E402
 from thesis_fitzpatrick.preprocessing import atomic_write_png, detector_from_config, run_p0  # noqa: E402
 from thesis_fitzpatrick.reporting import write_report  # noqa: E402
@@ -433,6 +434,19 @@ def main() -> None:
                     )
                 post_time = (time.perf_counter() - post_started) * 1000
                 atomic_write_png(prediction_directory / "final_mask.png", final * 255)
+                clean_skin, clean_skin_metadata = build_clean_skin_mask(Image.fromarray(rgb, mode="RGB"), final)
+                if p0 is not None:
+                    clean_skin &= p0.fov_mask.astype(bool)
+                    clean_skin &= ~p0.hair_mask.astype(bool)
+                clean_skin &= ~final.astype(bool)
+                clean_skin_path = prediction_directory / "clean_skin_mask.png"
+                atomic_write_png(clean_skin_path, clean_skin * 255)
+                skin_colour = None
+                skin_colour_error = None
+                try:
+                    skin_colour = measure_skin_colour(Image.fromarray(rgb, mode="RGB"), clean_skin).to_dict()
+                except ValueError as exc:
+                    skin_colour_error = str(exc)
                 if config.get("store_web_previews", True):
                     _write_rgb_preview(prediction_directory / "overlay.jpg", _prediction_overlay(rgb, final))
                 result_metrics = segmentation_metrics(
@@ -467,6 +481,11 @@ def main() -> None:
                         if p0 and p0.cache_hit else "Measured sequentially without P0 cache reuse."
                     ),
                     "failure_code": backend.failure_code,
+                    "clean_skin_mask": "clean_skin_mask.png",
+                    "clean_skin_metadata": clean_skin_metadata,
+                    "skin_colour": skin_colour,
+                    "skin_colour_available": skin_colour is not None,
+                    "skin_colour_error": skin_colour_error,
                 }
                 atomic_write_json(prediction_directory / "result.json", result_payload)
                 if result_metrics:

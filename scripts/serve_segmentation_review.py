@@ -166,7 +166,7 @@ def benchmark_run(run_id: str) -> dict:
             artifacts["original_image.jpg"] = local_image_urls[payload["image_id"]]
         if payload.get("ground_truth_preview") and (root / payload["ground_truth_preview"]).is_file(): artifacts["ground_truth.png"] = f"/files/benchmark/{run_id}/{payload['ground_truth_preview']}"
         if payload.get("overlay_preview") and (path.parent / payload["overlay_preview"]).is_file(): artifacts["prediction_overlay.jpg"] = f"/files/benchmark/{run_id}/{relative_root}/{payload['overlay_preview']}"
-        for name in ("native_mask.png", "pre_postprocess_mask.png", "final_mask.png", "raw_probability.npy"):
+        for name in ("native_mask.png", "pre_postprocess_mask.png", "final_mask.png", "clean_skin_mask.png", "raw_probability.npy"):
             if (path.parent / name).is_file(): artifacts[name] = f"/files/benchmark/{run_id}/{relative_root}/{name}"
         cache_key = payload.get("p0_cache_key")
         if cache_key:

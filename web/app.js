@@ -64,6 +64,7 @@ async function loadRunIndex() {
   const payload = await (await fetch("/api/benchmark/runs")).json();
   state.benchmarkRuns = payload.runs ?? [];
   const options = (filter) => state.benchmarkRuns.filter(filter).map((run) => `<option value="${escapeHtml(run.run_id)}">${escapeHtml(run.run_id)} · ${escapeHtml(run.status)}</option>`).join("");
+  $("#native-run").innerHTML = options((run) => run.evaluation === "A");
   $("#common-run").innerHTML = options((run) => ["B1", "B2"].includes(run.evaluation));
   $("#ablation-run").innerHTML = options((run) => run.evaluation === "ablation");
   const sealed = state.benchmarkRuns.filter((run) => String(run.run_id).startsWith("sealed-"));
@@ -310,6 +311,7 @@ $("#previous").addEventListener("click", () => { state.slide -= 1; renderSlide()
 $("#next").addEventListener("click", () => { state.slide += 1; renderSlide(); });
 $("#result-model").addEventListener("change", (event) => { state.activeModelId = event.target.value; state.slide = 0; renderSlide(); });
 $("#load-common-run").addEventListener("click", () => loadSelectedRun("#common-run", "#common-run-view").catch((error) => { $("#common-run-view").textContent = error.message; }));
+$("#load-native-run").addEventListener("click", () => loadSelectedRun("#native-run", "#native-run-view").catch((error) => { $("#native-run-view").textContent = error.message; }));
 $("#load-ablation-run").addEventListener("click", () => loadSelectedRun("#ablation-run", "#ablation-run-view").catch((error) => { $("#ablation-run-view").textContent = error.message; }));
 $("#annotation-image").addEventListener("change", annotationImageChanged);
 $("#annotation-mask").addEventListener("pointerdown", (event) => { annotationDrawing = true; event.target.setPointerCapture(event.pointerId); drawAnnotation(event); });

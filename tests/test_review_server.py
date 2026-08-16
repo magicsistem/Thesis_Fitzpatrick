@@ -87,6 +87,29 @@ class ReviewServerTests(unittest.TestCase):
         self.assertIn("Comparación de máscaras", page)
         self.assertIn("id=\"carousel\"", page)
         self.assertIn("id=\"select-all-models\"", page)
+        self.assertIn("id=\"native-run\"", page)
+        self.assertIn("id=\"native-run-view\"", page)
+        app = (REPO_ROOT / "web" / "app.js").read_text(encoding="utf-8")
+        self.assertIn('run.evaluation === "A"', app)
+        self.assertIn('["B1", "B2"].includes(run.evaluation)', app)
+
+    def test_benchmark_run_exposes_clean_skin_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            prediction = root / "runs" / "native-a" / "predictions" / "S16" / "one"
+            prediction.mkdir(parents=True)
+            (root / "runs" / "native-a" / "run_manifest.json").write_text(json.dumps({"dataset": "synthetic", "split": "validation"}), encoding="utf-8")
+            (prediction / "result.json").write_text(json.dumps({
+                "image_id": "one", "dataset_id": "synthetic", "evaluation": "A",
+                "method_id": "S16", "clean_skin_mask": "clean_skin_mask.png",
+            }), encoding="utf-8")
+            Image.fromarray(np.zeros((2, 2), dtype=np.uint8)).save(prediction / "clean_skin_mask.png")
+            with patch.object(review, "BENCHMARK_ARTIFACT_ROOT", root):
+                payload = review.benchmark_run("native-a")
+            self.assertEqual(
+                payload["results"][0]["artifacts"]["clean_skin_mask.png"],
+                "/files/benchmark/native-a/predictions/S16/one/clean_skin_mask.png",
+            )
 
     def test_inference_accepts_every_catalogued_model(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

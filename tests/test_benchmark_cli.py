@@ -61,6 +61,11 @@ class BenchmarkCliTests(unittest.TestCase):
             self.assertIsNotNone(result["metrics"])
             self.assertTrue((result_path.parent / "native_mask.png").is_file())
             self.assertTrue((result_path.parent / "final_mask.png").is_file())
+            self.assertTrue((result_path.parent / "clean_skin_mask.png").is_file())
+            self.assertIn("clean_skin_metadata", result)
+            self.assertIn("skin_colour", result)
+            self.assertIn("skin_colour_available", result)
+            self.assertIn("skin_colour_error", result)
             self.assertTrue((result_path.parent / "overlay.jpg").is_file())
             self.assertTrue((root / "artifacts" / "runs" / "integration-a" / "inputs" / "one.ground_truth.png").is_file())
             run = json.loads((root / "artifacts" / "runs" / "integration-a" / "run_manifest.json").read_text())
@@ -84,6 +89,17 @@ class BenchmarkCliTests(unittest.TestCase):
             )
             self.assertEqual(common_result["evaluation"], "B1")
             self.assertFalse(common_result["p0_cache_hit"])
+            clean_path = root / "artifacts" / "runs" / "integration-b1" / "predictions" / "S16" / "one" / "clean_skin_mask.png"
+            self.assertTrue(clean_path.is_file())
+            clean = np.asarray(Image.open(clean_path)) > 0
+            final = np.asarray(Image.open(clean_path.parent / "final_mask.png")) > 0
+            self.assertFalse(np.any(clean & final))
+            cache_root = root / "artifacts" / "preprocessing" / "synthetic_test" / "one"
+            cache = next(cache_root.glob("*/"))
+            fov = np.asarray(Image.open(cache / "fov_mask.png")) > 0
+            hair = np.asarray(Image.open(cache / "hair_mask.png")) > 0
+            self.assertFalse(np.any(clean & ~fov))
+            self.assertFalse(np.any(clean & hair))
             self.assertTrue((root / "artifacts" / "preprocessing" / "synthetic_test" / "one").is_dir())
             self.assertEqual(len(list((root / "artifacts" / "preprocessing" / "synthetic_test" / "one").glob("*/yolo_overlay.png"))), 1)
 
