@@ -75,7 +75,7 @@ export RUNTIME_DIAGNOSTICS_LOG
 # training payload.  Do not pay a second image startup merely to validate it.
 setsid "$PROJECT_ROOT/scripts/hpc/run_in_container.sh" -- bash -c '
 set -Eeuo pipefail
-python - "$1" "$2" "$3" <<'"'"'PY'"'"'
+python - "$1" "$2" "${3}/oof_manifest.json" <<'"'"'PY'"'"'
 import json, pathlib, sys
 manifest_path, folds_path, p0_manifest_path = map(pathlib.Path, sys.argv[1:])
 manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -92,7 +92,7 @@ exec "$4" scripts/benchmark/train_backend.py \
   --method "$6" --manifest "$1" --data-root "$7" --folds "$2" --fold "$8" \
   --p0-root "$3" --output "$9" --epochs "${10}" --seed "${11}" --device cuda \
   --resume-if-valid --confirm-training
-' _ "$TRAIN_MANIFEST" "$FOLDS_FILE" "$P0_ROOT/oof_manifest.json" "$python_bin" "$YOLO_FROZEN_ROOT" \
+' _ "$TRAIN_MANIFEST" "$FOLDS_FILE" "$P0_ROOT" "$python_bin" "$YOLO_FROZEN_ROOT" \
     "$METHOD_ID" "$DATA_ROOT" "$FOLD" "$OUTPUT" "$EPOCHS" "$SEED" &
 child=$!
 child_pgid=$child
