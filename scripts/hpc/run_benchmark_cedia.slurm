@@ -56,7 +56,13 @@ if run.is_file():
         print("Run already completed and will not be repeated")
         raise SystemExit(0)
     raise SystemExit("Incomplete run exists; inspect it before choosing a new RUN_PREFIX")
-print(f"validated dataset={manifest.get('dataset_id')} split={manifest.get('split')} images={len(manifest['items'])}")
+dataset_id = manifest.get("dataset_id")
+split = manifest.get("split")
+image_count = len(manifest["items"])
+print(
+    f"validated dataset={dataset_id} "
+    f"split={split} images={image_count}"
+)
 PY
 python scripts/benchmark/yolov3.py validate-folds --root "$3"
 if [[ "$4" == A || "$4" == B1 ]]; then

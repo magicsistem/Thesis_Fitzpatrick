@@ -54,6 +54,12 @@ class HPCScriptTests(unittest.TestCase):
         self.assertNotIn('oof_manifest.json/oof_manifest.json', b2)
         self.assertIn("#SBATCH --array=0-5%1", benchmark)
         self.assertIn("stages=(A B1 C0 C1 C2 C3)", benchmark)
+        payload = benchmark.split("import json, pathlib, sys\n", 1)[1].split("\nPY", 1)[0]
+        self.assertIn('dataset_id = manifest.get("dataset_id")', payload)
+        self.assertIn('split = manifest.get("split")', payload)
+        self.assertIn('image_count = len(manifest["items"])', payload)
+        self.assertNotIn("manifest.get('", payload)
+        self.assertNotIn("manifest['", payload)
         validator = (HPC_ROOT / "validate_existing_cedia.slurm").read_text(encoding="utf-8")
         self.assertNotIn("#SBATCH --partition=gpu", validator)
         self.assertNotIn("--gres=gpu", validator)
