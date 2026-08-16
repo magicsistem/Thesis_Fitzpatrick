@@ -15,7 +15,7 @@ trap 'rc=$?; echo "OOF P0 failed rc=$rc line=$LINENO" >&2; exit "$rc"' ERR
 : "${PROJECT_ROOT:?}"; : "${DATA_ROOT:?}"; : "${TRAIN_MANIFEST:?}"; : "${FOLDS_FILE:?}"; : "${YOLO_FROZEN_ROOT:?}"
 PROJECT_ROOT=$(realpath "$PROJECT_ROOT"); DATA_ROOT=$(realpath "$DATA_ROOT")
 P0_ROOT=${P0_ROOT:-$PROJECT_ROOT/results/benchmark_v1/preprocessing}
-P0_WORKERS=${P0_WORKERS:-24}
+P0_WORKERS=${P0_WORKERS:-16}
 P0_LIMIT=${P0_LIMIT:-}
 [[ "$P0_WORKERS" =~ ^[1-9][0-9]*$ && "$P0_WORKERS" -le "${SLURM_CPUS_PER_TASK:-32}" ]] || { echo "P0_WORKERS must be 1..SLURM_CPUS_PER_TASK" >&2; exit 2; }
 [[ -z "$P0_LIMIT" || "$P0_LIMIT" =~ ^[1-9][0-9]*$ ]] || { echo "P0_LIMIT must be empty or positive" >&2; exit 2; }

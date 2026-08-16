@@ -76,13 +76,13 @@ class HPCScriptTests(unittest.TestCase):
             self.assertTrue(all(value >= 32 for value in cpu_requests), path)
             self.assertTrue(all(value >= 60 for value in memory_requests), path)
 
-    def test_p0_slurm_uses_24_processes_reuse_cache_and_one_thread_libraries(self):
+    def test_p0_slurm_uses_16_processes_reuse_cache_and_one_thread_libraries(self):
         p0 = (HPC_ROOT / "prepare_p0_oof_cedia.slurm").read_text(encoding="utf-8")
         wrapper = (HPC_ROOT / "run_in_container.sh").read_text(encoding="utf-8")
         self.assertIn("#SBATCH --cpus-per-task=32", p0)
         self.assertIn("#SBATCH --mem=60G", p0)
         self.assertIn("#SBATCH --gres=gpu:a100-sxm4-40gb:1", p0)
-        self.assertIn("P0_WORKERS=${P0_WORKERS:-24}", p0)
+        self.assertIn("P0_WORKERS=${P0_WORKERS:-16}", p0)
         self.assertIn('P0_LIMIT=${P0_LIMIT:-}', p0)
         self.assertIn('--workers "$7" --reuse-cache', p0)
         for name in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "NUMEXPR_NUM_THREADS", "VECLIB_MAXIMUM_THREADS", "BLIS_NUM_THREADS"):

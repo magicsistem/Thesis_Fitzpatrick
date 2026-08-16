@@ -6,6 +6,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import cv2
 import numpy as np
@@ -16,6 +17,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from thesis_fitzpatrick.benchmark import ImageInput  # noqa: E402
+import thesis_fitzpatrick.preprocessing as preprocessing  # noqa: E402
 from thesis_fitzpatrick.preprocessing import (  # noqa: E402
     BBox,
     CoordinateTransform,
@@ -30,6 +32,11 @@ from scripts.benchmark import prepare_p0_oof as p0_oof  # noqa: E402
 
 
 CONFIG = json.loads((REPO_ROOT / "configs" / "benchmark" / "default.json").read_text())
+
+
+def _reference_component_points(labels: np.ndarray, _stats: np.ndarray, label: int) -> np.ndarray | None:
+    points = np.column_stack(np.where(labels == label))[:, ::-1].astype(np.float32)
+    return points if len(points) >= 3 else None
 
 
 class CountingDetector:
@@ -90,6 +97,45 @@ class FOVTests(unittest.TestCase):
 
 
 class HairTests(unittest.TestCase):
+    def test_component_scan_matches_full_image_reference(self) -> None:
+        candidate = np.zeros((96, 128), np.uint8)
+        candidate[0, :7] = 1
+        candidate[-1, -8:] = 1
+        cv2.line(candidate, (4, 60), (80, 60), 1, 1)
+        cv2.line(candidate, (100, 3), (100, 82), 1, 1)
+        cv2.line(candidate, (12, 88), (88, 12), 1, 1)
+        rng = np.random.default_rng(73)
+        noise_y, noise_x = np.where(rng.random(candidate.shape) < 0.02)
+        candidate[noise_y, noise_x] = 1
+        count, labels, stats, _ = cv2.connectedComponentsWithStats(candidate, connectivity=8)
+        for label in range(1, count):
+            expected = _reference_component_points(labels, stats, label)
+            actual = preprocessing._component_points(labels, stats, label)
+            if expected is None:
+                self.assertIsNone(actual)
+                continue
+            np.testing.assert_array_equal(actual, expected)
+            self.assertEqual(cv2.minAreaRect(actual), cv2.minAreaRect(expected))
+
+    def test_optimized_hair_result_matches_reference_component_scan(self) -> None:
+        rgb = np.full((160, 200, 3), 165, dtype=np.uint8)
+        cv2.line(rgb, (0, 2), (199, 2), (20, 20, 20), 2)
+        cv2.line(rgb, (9, 0), (9, 159), (20, 20, 20), 2)
+        cv2.line(rgb, (15, 145), (180, 20), (20, 20, 20), 2)
+        rng = np.random.default_rng(19)
+        noise = rng.random(rgb.shape[:2]) < 0.01
+        rgb[noise] = (50, 50, 50)
+        fov = np.ones(rgb.shape[:2], np.uint8)
+        with patch.object(preprocessing, "_component_points", _reference_component_points):
+            expected = detect_and_inpaint_hair(rgb, fov, CONFIG["p0"]["hair"])
+        actual = detect_and_inpaint_hair(rgb, fov, CONFIG["p0"]["hair"])
+        np.testing.assert_array_equal(actual.mask, expected.mask)
+        np.testing.assert_array_equal(actual.segmentation_input, expected.segmentation_input)
+        self.assertEqual(actual.coverage_fraction, expected.coverage_fraction)
+        self.assertEqual(actual.fallback_used, expected.fallback_used)
+        self.assertEqual(actual.warnings, expected.warnings)
+        self.assertEqual(actual.parameters, expected.parameters)
+
     def test_multiorientation_lines_are_detected_without_mutating_original(self) -> None:
         rgb = np.full((180, 220, 3), 165, dtype=np.uint8)
         cv2.line(rgb, (20, 30), (200, 80), (20, 20, 20), 2)

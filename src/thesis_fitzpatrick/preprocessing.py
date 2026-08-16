@@ -380,6 +380,18 @@ def _line_kernel(length: int, thickness: int, angle: float) -> np.ndarray:
     return kernel
 
 
+def _component_points(labels: np.ndarray, stats: np.ndarray, label: int) -> np.ndarray | None:
+    """Return one connected component's global points without scanning its full image."""
+    x = int(stats[label, cv2.CC_STAT_LEFT])
+    y = int(stats[label, cv2.CC_STAT_TOP])
+    width = int(stats[label, cv2.CC_STAT_WIDTH])
+    height = int(stats[label, cv2.CC_STAT_HEIGHT])
+    if int(stats[label, cv2.CC_STAT_AREA]) < 3:
+        return None
+    local_y, local_x = np.where(labels[y:y + height, x:x + width] == label)
+    return np.column_stack((local_x + x, local_y + y)).astype(np.float32)
+
+
 def detect_and_inpaint_hair(rgb: np.ndarray, fov_mask: np.ndarray, config: dict[str, Any]) -> HairResult:
     original = rgb.copy()
     height, width = rgb.shape[:2]
@@ -401,10 +413,10 @@ def detect_and_inpaint_hair(rgb: np.ndarray, fov_mask: np.ndarray, config: dict[
     # square component and fail the elongation test.
     for oriented_response in responses:
         candidate = ((oriented_response >= threshold) & (fov_mask > 0)).astype(np.uint8)
-        count, labels, _, _ = cv2.connectedComponentsWithStats(candidate, connectivity=8)
+        count, labels, stats, _ = cv2.connectedComponentsWithStats(candidate, connectivity=8)
         for label in range(1, count):
-            points = np.column_stack(np.where(labels == label))[:, ::-1].astype(np.float32)
-            if len(points) < 3:
+            points = _component_points(labels, stats, label)
+            if points is None:
                 continue
             (_, _), (side_a, side_b), _ = cv2.minAreaRect(points)
             long_side, short_side = max(side_a, side_b), max(1.0, min(side_a, side_b))
