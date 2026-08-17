@@ -24,6 +24,13 @@ class BenchmarkCliTests(unittest.TestCase):
         self.assertEqual(source.count("clean_skin_context = prepare_clean_skin_context"), 1)
         self.assertIn("context=clean_skin_context", source)
 
+    def test_technical_failures_and_quality_flags_are_separate(self) -> None:
+        source = (REPO_ROOT / "scripts/benchmark/run_evaluation.py").read_text(encoding="utf-8")
+        self.assertIn("is_fatal_backend_failure", source)
+        self.assertIn("quality_flags.csv", source)
+        self.assertIn('"failure_is_fatal"', source)
+        self.assertIn('"degenerate_prediction"', source)
+
     def test_s16_native_manifest_run_exports_prediction_and_metrics(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

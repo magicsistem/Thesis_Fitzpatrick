@@ -50,6 +50,13 @@ def segmentation_metrics(
     boundary_tolerance_diagonal_fraction: float = 0.01,
     nearly_complete_fraction: float = 0.98,
 ) -> dict[str, Any]:
+    """Compute binary segmentation metrics with explicit degenerate conventions.
+
+    Empty prediction versus non-empty ground truth is a valid poor prediction:
+    Jaccard, Dice, sensitivity and boundary F1 are zero. HD95 is undefined
+    because one boundary is absent and is returned as ``None`` with the
+    corresponding flag. The observation must not be silently discarded.
+    """
     if prediction.shape != ground_truth.shape or prediction.ndim != 2:
         raise ValueError("prediction and ground truth must be same-size 2D masks")
     invalid_values = bool(not np.all(np.isfinite(prediction)) or not np.all(np.isfinite(ground_truth)))

@@ -34,6 +34,7 @@ from thesis_fitzpatrick.benchmark import (  # noqa: E402
     evaluation_registry,
     load_benchmark_methods,
     load_json,
+    is_fatal_backend_failure,
     sha256_file,
     validate_dataset_manifest,
     validate_dataset_registry,
@@ -378,6 +379,7 @@ def main() -> None:
     atomic_write_json(manifest_path, manifest)
     metrics_rows: list[dict[str, Any]] = []
     failures: list[dict[str, Any]] = []
+    quality_flags: list[dict[str, Any]] = []
     completed = 0
     started_run = time.perf_counter()
     try:
@@ -419,8 +421,9 @@ def main() -> None:
                 else:
                     adapter_input = item["image_path"] if args.evaluation == "A" else p0.cache_directory / "roi_input.png"
                     backend = _neural_backend(method, adapter_input, native_path, warmup=args.warmup, repetitions=args.repetitions)
+                fatal_backend_failure = is_fatal_backend_failure(backend.failure_code)
                 post_started = time.perf_counter()
-                if backend.failure_code:
+                if fatal_backend_failure:
                     restored = np.zeros(rgb.shape[:2], np.uint8)
                     final = restored
                     post_details = {"skipped": True, "reason": backend.failure_code}
@@ -456,7 +459,13 @@ def main() -> None:
                     hair_mask=p0.hair_mask if p0 else None,
                     threshold_jaccard_cutoff=config["metrics"]["threshold_jaccard_cutoff"],
                     boundary_tolerance_diagonal_fraction=config["metrics"]["boundary_tolerance_diagonal_fraction"],
-                ) if ground_truth is not None else None
+                ) if ground_truth is not None and not fatal_backend_failure else None
+                metric_flags = (result_metrics or {}).get("flags") or {}
+                outcome = (
+                    "technical_failure" if fatal_backend_failure
+                    else "degenerate_prediction" if backend.failure_code or metric_flags.get("prediction_empty") or metric_flags.get("prediction_nearly_complete")
+                    else "ok"
+                )
                 end_to_end = (time.perf_counter() - method_started) * 1000 + (sum(p0.timings_ms.values()) if p0 else 0.0)
                 result_payload = {
                     "schema_version": 1,
@@ -482,6 +491,8 @@ def main() -> None:
                         if p0 and p0.cache_hit else "Measured sequentially without P0 cache reuse."
                     ),
                     "failure_code": backend.failure_code,
+                    "failure_is_fatal": fatal_backend_failure,
+                    "outcome": outcome,
                     "clean_skin_mask": "clean_skin_mask.png",
                     "clean_skin_metadata": clean_skin_metadata,
                     "skin_colour": skin_colour,
@@ -495,9 +506,16 @@ def main() -> None:
                         "method_id": method["method_id"],
                         **{key: value for key, value in result_metrics.items() if isinstance(value, (int, float)) or value is None},
                     })
-                if backend.failure_code:
+                if fatal_backend_failure:
                     failure = {"image_id": image.image_id, "method_id": method["method_id"], "failure_code": backend.failure_code, "warnings": " | ".join(backend.warnings)}
                     failures.append(failure)
+                elif outcome == "degenerate_prediction":
+                    reasons = [value for value in (
+                        backend.failure_code,
+                        "prediction_empty" if metric_flags.get("prediction_empty") else None,
+                        "prediction_nearly_complete" if metric_flags.get("prediction_nearly_complete") else None,
+                    ) if value]
+                    quality_flags.append({"image_id": image.image_id, "method_id": method["method_id"], "quality_flags": " | ".join(dict.fromkeys(reasons)), "warnings": " | ".join(backend.warnings)})
                 if p0 and p0.fallback_used:
                     manifest["fallbacks"].append({"image_id": image.image_id, "method_id": method["method_id"], "type": "yolo_full_fov"})
                 completed += 1
@@ -506,11 +524,13 @@ def main() -> None:
                 print(f"[{completed}/{summary['executions']}] {method['method_id']} {image.image_id} · ETA {eta:.1f}s", flush=True)
         _write_csv(run_directory / "metrics_per_image.csv", metrics_rows)
         _write_csv(run_directory / "failures.csv", failures)
+        _write_csv(run_directory / "quality_flags.csv", quality_flags)
+        manifest["failures"] = failures
+        manifest["quality_flags"] = quality_flags
         if failures:
-            raise RuntimeError(f"Benchmark incompleto: {len(failures)} ejecuciones de backend fallaron")
+            raise RuntimeError(f"Benchmark incompleto: {len(failures)} fallos técnicos requieren reejecución")
         manifest["status"] = "completed"
         manifest["completed_utc"] = datetime.now(timezone.utc).isoformat()
-        manifest["failures"] = failures
         write_report(run_directory, repetitions=config["metrics"]["bootstrap_repetitions"], seed=config["seed"])
     except BaseException as exc:
         manifest["status"] = "interrupted" if isinstance(exc, KeyboardInterrupt) else "failed"

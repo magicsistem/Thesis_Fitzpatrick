@@ -16,6 +16,7 @@ from thesis_fitzpatrick.benchmark import (  # noqa: E402
     ImageInput,
     build_grouped_folds,
     evaluation_registry,
+    is_fatal_backend_failure,
     load_benchmark_methods,
     validate_dataset_manifest,
     validate_dataset_registry,
@@ -28,6 +29,13 @@ class BenchmarkContractTests(unittest.TestCase):
         self.assertEqual([item["method_id"] for item in methods], [f"S{i:02d}" for i in range(1, 17)])
         self.assertEqual(methods[-1]["backend_id"], "grabcut")
         self.assertEqual(sum(item["kind"] == "neural" for item in methods), 15)
+
+    def test_degenerate_predictions_are_not_technical_failures(self) -> None:
+        self.assertFalse(is_fatal_backend_failure(None))
+        self.assertFalse(is_fatal_backend_failure("empty_mask"))
+        self.assertFalse(is_fatal_backend_failure("nearly_complete_mask"))
+        self.assertTrue(is_fatal_backend_failure("adapter_error"))
+        self.assertTrue(is_fatal_backend_failure("grabcut_error"))
 
     def test_b2_is_not_relabelled_b1_without_standardized_checkpoints(self) -> None:
         evaluations = {item["id"]: item for item in evaluation_registry(

@@ -5,6 +5,52 @@ bootstrap, preparación de ISIC, pruebas y preparación de folds; por ello el
 launcher no necesita GPU ni debe durar más que los `sbatch` y la escritura
 atómica de su registro.
 
+## Recuperación granular de A/B1
+
+La evaluación A/B1 tiene un reparador específico:
+`scripts/benchmark/resume_evaluation.py`. No repite automáticamente las
+combinaciones válidas. Primero audita los `result.json` y artefactos, separa
+predicciones degeneradas de fallos técnicos y conserva el estado previo bajo
+`resume_attempts/<attempt_id>/`.
+
+La reanudación se rechaza si cambian dataset, split, orden de imágenes,
+configuración, manifiesto o checkpoints; también si el run original estaba
+dirty, el árbol actual está dirty o el commit original no es ancestro del
+commit de reparación.
+
+Para el A `cedia-development-a-23188`:
+
+```bash
+cd "$HOME/Thesis_Fitzpatrick"
+git status --short
+git rev-parse HEAD
+
+export PROJECT_ROOT="$HOME/Thesis_Fitzpatrick"
+export DATA_ROOT="$PROJECT_ROOT/data/raw/isic2018_task1"
+export DEVELOPMENT_MANIFEST="$DATA_ROOT/manifests/isic2018_task1_validation_disjoint.json"
+export BENCHMARK_CONFIG="$PROJECT_ROOT/.cedia/benchmark.cedia.json"
+export TARGET_RUN_ID=cedia-development-a-23188
+
+sbatch scripts/hpc/resume_evaluation_cedia.slurm
+```
+
+El reparador detectará los fallos técnicos existentes y generará micro-runs
+únicamente para esas combinaciones; los micro-runs terminados se archivan
+dentro del propio run reparado. Si todos quedan válidos, reconstruye
+`metrics_per_image.csv`, `failures.csv`, `quality_flags.csv`,
+`metrics_summary.csv`, `metrics_summary.md`, `statistical_comparisons.csv` y
+`report.json`, y cambia el manifest a `completed`.
+
+Para B1 use:
+
+```bash
+export TARGET_RUN_ID=cedia-development-b1-23188
+sbatch scripts/hpc/resume_evaluation_cedia.slurm
+```
+
+Si B1 no contiene fallos técnicos, no se repite ninguna inferencia: sólo se
+reclasifican las predicciones degeneradas y se generan los reportes faltantes.
+
 ## Diagnóstico antes de relanzar
 
 No se borra `results/`, `.cedia/diagnostics/`, `backup/`, estados ni logs.

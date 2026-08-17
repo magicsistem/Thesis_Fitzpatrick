@@ -4,6 +4,31 @@ Este documento describe la implementación posterior a la Fase 0. No modifica ni
 reinterpreta su handoff. Los resultados de prueba, parciales o sintéticos no son
 resultados científicos.
 
+## Fallo técnico frente a predicción degenerada
+
+El benchmark distingue dos fenómenos:
+
+- **fallo técnico**: no existe una predicción utilizable (`adapter_error`,
+  `grabcut_error`, salida inválida, artefactos faltantes). La combinación se
+  excluye de agregados hasta reejecutarse;
+- **predicción degenerada**: el método ejecutó y devolvió una máscara vacía o
+  casi completa. Es un resultado de rendimiento y permanece en el denominador.
+
+Con ground truth no vacío y predicción vacía se registran Jaccard=0, Dice=0,
+sensibilidad=0 y boundary-F1=0. HD95 queda indefinido porque falta la frontera
+predicha. `fov_leak=0` conserva `fov_leak_denominator_zero=true`, evitando
+interpretar ese cero como evidencia de buena segmentación.
+
+`failures.csv` contiene fallos técnicos. `quality_flags.csv` contiene salidas
+degeneradas detectadas por el backend o por `metrics.flags`, incluidas máscaras
+vacías de backends neuronales que no emiten `failure_code`. Los reportes
+agregados separan ambas categorías.
+
+`scripts/benchmark/resume_evaluation.py` repara A/B1 existentes sin repetir
+predicciones válidas. Valida el contrato científico y la ascendencia Git,
+archiva el estado anterior, reejecuta sólo combinaciones técnicas fallidas,
+reconstruye CSV/reportes y conserva trazabilidad en `resume_history`.
+
 ## Estado real
 
 - S01–S15 son exactamente las quince entradas, en orden de `priority`, de

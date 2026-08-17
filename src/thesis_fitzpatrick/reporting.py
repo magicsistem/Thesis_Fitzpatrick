@@ -11,7 +11,7 @@ from typing import Any
 
 import numpy as np
 
-from .benchmark import atomic_write_bytes, atomic_write_json, load_json
+from .benchmark import atomic_write_bytes, atomic_write_json, is_fatal_backend_failure, load_json
 from .metrics import holm_adjust, mcnemar_exact, paired_bootstrap, paired_permutation_pvalue
 
 
@@ -40,12 +40,22 @@ def load_run_rows(run_directory: Path) -> list[dict[str, Any]]:
         payload = load_json(path)
         metrics = payload.get("metrics") or {}
         metadata = payload.get("metadata") or {}
+        flags = metrics.get("flags") or {}
+        failure_code = payload.get("failure_code") or (payload.get("backend") or {}).get("failure_code")
+        technical_failure = is_fatal_backend_failure(failure_code)
+        prediction_empty = bool(flags.get("prediction_empty"))
+        prediction_nearly_complete = bool(flags.get("prediction_nearly_complete"))
         rows.append({
             "image_id": payload["image_id"],
             "method_id": payload["method_id"],
             "condition": payload.get("condition") or payload.get("evaluation"),
             "fitzpatrick": metadata.get("fitzpatrick"),
-            "failure": bool(payload.get("failure_code")),
+            "failure_code": failure_code,
+            "failure": technical_failure,
+            "technical_failure": technical_failure,
+            "prediction_empty": prediction_empty,
+            "prediction_nearly_complete": prediction_nearly_complete,
+            "degenerate_prediction": (not technical_failure) and bool(failure_code or prediction_empty or prediction_nearly_complete),
             "fallback": bool(payload.get("fallback_used") or payload.get("p0_fallback_used")),
             "backend_time_ms": (payload.get("backend") or {}).get("backend_time_ms"),
             "end_to_end_time_ms": payload.get("end_to_end_time_ms"),
@@ -65,12 +75,19 @@ def aggregate(rows: list[dict[str, Any]], *, repetitions: int = 10_000, seed: in
     keys = sorted({(row["condition"], row["method_id"]) for row in rows})
     for condition, method_id in keys:
         subset = [row for row in rows if (row["condition"], row["method_id"]) == (condition, method_id)]
+        scientific_subset = [row for row in subset if not row["technical_failure"]]
         result: dict[str, Any] = {
             "condition": condition, "method_id": method_id, "n": len(subset),
-            "failures": sum(row["failure"] for row in subset), "fallbacks": sum(row["fallback"] for row in subset),
+            "scientific_n": len(scientific_subset),
+            "failures": sum(row["technical_failure"] for row in subset),
+            "technical_failures": sum(row["technical_failure"] for row in subset),
+            "degenerate_predictions": sum(row["degenerate_prediction"] for row in subset),
+            "prediction_empty": sum(row["prediction_empty"] for row in subset),
+            "prediction_nearly_complete": sum(row["prediction_nearly_complete"] for row in subset),
+            "fallbacks": sum(row["fallback"] for row in subset),
         }
         for metric in METRICS:
-            values = np.asarray([row[metric] for row in subset if row.get(metric) is not None and math.isfinite(float(row[metric]))], dtype=float)
+            values = np.asarray([row[metric] for row in scientific_subset if row.get(metric) is not None and math.isfinite(float(row[metric]))], dtype=float)
             if len(values):
                 low, high = _ci(values, repetitions, seed)
                 result.update({f"{metric}_mean": float(mean(values)), f"{metric}_median": float(median(values)), f"{metric}_ci95_low": low, f"{metric}_ci95_high": high})
@@ -90,7 +107,14 @@ def paired_comparisons(rows: list[dict[str, Any]], *, repetitions: int = 10_000,
     comparisons: list[dict[str, Any]] = []
     for condition in sorted({row["condition"] for row in rows}):
         subset = [row for row in rows if row["condition"] == condition]
-        by_method = {method: {row["image_id"]: row for row in subset if row["method_id"] == method} for method in sorted({row["method_id"] for row in subset})}
+        by_method = {
+            method: {
+                row["image_id"]: row
+                for row in subset
+                if row["method_id"] == method and not row["technical_failure"]
+            }
+            for method in sorted({row["method_id"] for row in subset})
+        }
         for first, second in combinations(by_method, 2):
             image_ids = sorted(set(by_method[first]) & set(by_method[second]))
             for metric in ("threshold_jaccard", "jaccard", "dice", "boundary_f1", "hd95_normalized", "clean_skin_contamination"):
@@ -117,10 +141,20 @@ def write_report(run_directory: Path, *, repetitions: int = 10_000, seed: int = 
     comparisons = paired_comparisons(rows, repetitions=repetitions, seed=seed)
     _write_csv(run_directory / "metrics_summary.csv", summaries)
     _write_csv(run_directory / "statistical_comparisons.csv", comparisons)
-    lines = ["| Condición | Método | N | Fallos | TJ media | TJ mediana | IC95% |", "|---|---:|---:|---:|---:|---:|---|"]
+    lines = ["| Condición | Método | N | N científico | Fallos técnicos | Degeneradas | Vacías | TJ media | TJ mediana | IC95% |", "|---|---:|---:|---:|---:|---:|---:|---:|---:|---|"]
     for row in summaries:
-        lines.append(f"| {row['condition']} | {row['method_id']} | {row['n']} | {row['failures']} | {row.get('threshold_jaccard_mean', float('nan')):.4f} | {row.get('threshold_jaccard_median', float('nan')):.4f} | [{row.get('threshold_jaccard_ci95_low', float('nan')):.4f}, {row.get('threshold_jaccard_ci95_high', float('nan')):.4f}] |")
+        lines.append(f"| {row['condition']} | {row['method_id']} | {row['n']} | {row['scientific_n']} | {row['technical_failures']} | {row['degenerate_predictions']} | {row['prediction_empty']} | {row.get('threshold_jaccard_mean', float('nan')):.4f} | {row.get('threshold_jaccard_median', float('nan')):.4f} | [{row.get('threshold_jaccard_ci95_low', float('nan')):.4f}, {row.get('threshold_jaccard_ci95_high', float('nan')):.4f}] |")
     atomic_write_bytes(run_directory / "metrics_summary.md", ("\n".join(lines) + "\n").encode())
-    report = {"schema_version": 1, "run_id": run_directory.name, "rows": len(rows), "summaries": summaries, "pairwise_comparisons": comparisons, "bootstrap_repetitions": repetitions, "seed": seed}
+    report = {
+        "schema_version": 1,
+        "run_id": run_directory.name,
+        "rows": len(rows),
+        "scientific_rows": sum(not row["technical_failure"] for row in rows),
+        "outcome_convention": "Degenerate predictions remain scientific observations; technical failures are excluded until rerun.",
+        "summaries": summaries,
+        "pairwise_comparisons": comparisons,
+        "bootstrap_repetitions": repetitions,
+        "seed": seed,
+    }
     atomic_write_json(run_directory / "report.json", report)
     return report

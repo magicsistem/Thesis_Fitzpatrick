@@ -56,6 +56,23 @@ class MetricTests(unittest.TestCase):
             self.assertIsNone(metrics["hd95_pixels"])
             self.assertTrue(metrics["flags"]["hd95_undefined"])
 
+    def test_empty_prediction_against_nonempty_ground_truth_is_scored(self) -> None:
+        pred = np.zeros((10, 10), np.uint8)
+        gt = np.zeros((10, 10), np.uint8)
+        gt[3:7, 3:7] = 1
+        metrics = segmentation_metrics(pred, gt, fov_mask=np.ones_like(gt))
+        self.assertEqual(metrics["threshold_jaccard"], 0.0)
+        self.assertEqual(metrics["jaccard"], 0.0)
+        self.assertEqual(metrics["dice"], 0.0)
+        self.assertEqual(metrics["sensitivity"], 0.0)
+        self.assertEqual(metrics["precision"], 0.0)
+        self.assertEqual(metrics["specificity"], 1.0)
+        self.assertEqual(metrics["boundary_f1"], 0.0)
+        self.assertIsNone(metrics["hd95_pixels"])
+        self.assertTrue(metrics["flags"]["prediction_empty"])
+        self.assertTrue(metrics["flags"]["hd95_undefined"])
+        self.assertTrue(metrics["flags"]["fov_leak_denominator_zero"])
+
     def test_fov_leak_and_clean_skin_zero_denominators(self) -> None:
         pred = np.ones((5, 5), np.uint8)
         gt = np.ones((5, 5), np.uint8)

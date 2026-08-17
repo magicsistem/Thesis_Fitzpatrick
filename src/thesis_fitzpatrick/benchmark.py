@@ -20,6 +20,16 @@ import numpy as np
 
 
 SCHEMA_VERSION = 1
+NONFATAL_BACKEND_FAILURE_CODES = frozenset({"empty_mask", "nearly_complete_mask"})
+
+
+def is_fatal_backend_failure(failure_code: str | None) -> bool:
+    """Return whether a backend code means that no scientific prediction exists.
+
+    Empty and nearly-complete masks are degenerate predictions: they are poor
+    model outputs, but they remain valid observations for segmentation metrics.
+    """
+    return bool(failure_code) and failure_code not in NONFATAL_BACKEND_FAILURE_CODES
 
 
 class Evaluation(str, Enum):

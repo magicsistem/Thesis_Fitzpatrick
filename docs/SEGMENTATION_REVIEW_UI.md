@@ -83,6 +83,19 @@ Every slide displays:
 If an adapter is not configured, the interface reports that state instead of
 fabricating an inference.
 
+### Estado científico de cada resultado benchmark
+
+La vista A/B1/B2/C0–C3 diferencia **fallo técnico** de **predicción
+degenerada**. `adapter_error`, `grabcut_error` y artefactos inválidos se muestran
+como fallos técnicos y no participan en agregados hasta repararse. Una máscara
+vacía o casi completa se muestra como predicción degenerada y sí permanece en
+las métricas porque representa el rendimiento observado del método.
+
+La tabla de ranking muestra por separado `Fallos técnicos` y `Degeneradas`.
+Para runs históricos, el servidor deriva estas categorías desde
+`failure_code` y `metrics.flags`, de modo que un antiguo `empty_mask` no vuelve
+a presentarse como un crash aunque su `result.json` predatara esta convención.
+
 ## Full Fitzpatrick image pool
 
 The interface joins local image filenames to

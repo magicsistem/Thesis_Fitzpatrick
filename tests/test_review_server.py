@@ -92,6 +92,10 @@ class ReviewServerTests(unittest.TestCase):
         app = (REPO_ROOT / "web" / "app.js").read_text(encoding="utf-8")
         self.assertIn('run.evaluation === "A"', app)
         self.assertIn('["B1", "B2"].includes(run.evaluation)', app)
+        self.assertIn("Fallos técnicos", app)
+        self.assertIn("degenerate_predictions", app)
+        self.assertIn("failure_is_fatal", app)
+
 
     def test_benchmark_run_exposes_clean_skin_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -110,6 +114,33 @@ class ReviewServerTests(unittest.TestCase):
                 payload["results"][0]["artifacts"]["clean_skin_mask.png"],
                 "/files/benchmark/native-a/predictions/S16/one/clean_skin_mask.png",
             )
+
+    def test_benchmark_run_distinguishes_degenerate_from_technical_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run = root / "runs" / "outcomes"
+            (run / "predictions" / "S16" / "empty").mkdir(parents=True)
+            (run / "predictions" / "S03" / "killed").mkdir(parents=True)
+            (run / "run_manifest.json").write_text(json.dumps({"dataset": "synthetic", "split": "validation"}), encoding="utf-8")
+            (run / "predictions" / "S16" / "empty" / "result.json").write_text(json.dumps({
+                "image_id": "empty", "dataset_id": "synthetic", "evaluation": "B1",
+                "method_id": "S16", "failure_code": "empty_mask",
+                "backend": {"failure_code": "empty_mask"},
+                "metrics": {"flags": {"prediction_empty": True}},
+            }), encoding="utf-8")
+            (run / "predictions" / "S03" / "killed" / "result.json").write_text(json.dumps({
+                "image_id": "killed", "dataset_id": "synthetic", "evaluation": "A",
+                "method_id": "S03", "failure_code": "adapter_error",
+                "backend": {"failure_code": "adapter_error"},
+                "metrics": {"flags": {"prediction_empty": True}},
+            }), encoding="utf-8")
+            with patch.object(review, "BENCHMARK_ARTIFACT_ROOT", root):
+                payload = review.benchmark_run("outcomes")
+            by_method = {item["method_id"]: item for item in payload["results"]}
+            self.assertFalse(by_method["S16"]["failure_is_fatal"])
+            self.assertEqual(by_method["S16"]["outcome"], "degenerate_prediction")
+            self.assertTrue(by_method["S03"]["failure_is_fatal"])
+            self.assertEqual(by_method["S03"]["outcome"], "technical_failure")
 
     def test_inference_accepts_every_catalogued_model(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

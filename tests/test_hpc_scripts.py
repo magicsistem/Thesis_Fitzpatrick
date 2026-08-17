@@ -134,12 +134,21 @@ class HPCScriptTests(unittest.TestCase):
             "bootstrap_cedia.sh", "validate_existing_cedia.sh",
             "preflight_pipeline_cedia.slurm", "train_yolo_cedia.slurm",
             "train_b2_cedia.slurm", "run_benchmark_cedia.slurm",
+            "resume_evaluation_cedia.slurm",
             "launch_all_cedia.sh", "launch_pipeline_cedia.sh",
             "validate_existing_cedia.slurm",
         )
         for name in host_entrypoints:
             text = (HPC_ROOT / name).read_text(encoding="utf-8")
             self.assertNotRegex(text, re.compile(r"(?m)^\\s*python(?:3)?\\s"), name)
+
+    def test_evaluation_repair_runs_only_inside_the_container(self):
+        repair = (HPC_ROOT / "resume_evaluation_cedia.slurm").read_text(encoding="utf-8")
+        self.assertIn(': "${TARGET_RUN_ID:', repair)
+        self.assertIn("run_in_container.sh -- python scripts/benchmark/resume_evaluation.py", repair)
+        self.assertIn("--confirm-repair", repair)
+        self.assertIn("--reuse-p0-cache", repair)
+        self.assertNotIn("conda", repair.lower())
 
     def test_validate_existing_uses_container_python_not_an_old_host_python(self):
         source = HPC_ROOT / "validate_existing_cedia.sh"

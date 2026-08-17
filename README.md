@@ -196,9 +196,40 @@ find results/benchmark_v1 -type f -name '*.log' -o -name 'run_manifest.json' | s
 
 Cerrar el navegador no cancela un job Slurm. YOLO conserva backups y acepta
 `RESUME_WEIGHTS`; B2 detecta `training_state.pt` y añade `--resume`. Los runs de
-evaluación completados no se sobrescriben; uno incompleto debe auditarse y luego
-continuarse con un nuevo `RUN_PREFIX`, conservando el anterior como evidencia.
-No oculte OOM, timeout o adaptadores fallidos del denominador.
+evaluación completados no se sobrescriben. A/B1 fallidos pueden repararse con
+`resume_evaluation.py`: valida dataset, split, orden de imágenes, configuración,
+checkpoints y ascendencia Git; preserva el estado previo bajo
+`resume_attempts/`; y reejecuta únicamente combinaciones técnicamente inválidas.
+
+En CEDIA, después de aplicar/probar/commitear la reparación:
+
+```bash
+export PROJECT_ROOT="$HOME/Thesis_Fitzpatrick"
+export DATA_ROOT="$PROJECT_ROOT/data/raw/isic2018_task1"
+export DEVELOPMENT_MANIFEST="$DATA_ROOT/manifests/isic2018_task1_validation_disjoint.json"
+export BENCHMARK_CONFIG="$PROJECT_ROOT/.cedia/benchmark.cedia.json"
+
+# Reparar solamente los dos fallos técnicos del A histórico:
+export TARGET_RUN_ID=cedia-development-a-23188
+sbatch scripts/hpc/resume_evaluation_cedia.slurm
+
+# El mismo job puede cerrar B1 sin repetir inferencia si no tiene fallos técnicos:
+export TARGET_RUN_ID=cedia-development-b1-23188
+sbatch scripts/hpc/resume_evaluation_cedia.slurm
+```
+
+Un `adapter_error`, `grabcut_error`, resultado inválido o artefacto faltante es
+un **fallo técnico**: no existe una predicción científica utilizable y esa
+combinación debe reejecutarse. Una máscara vacía o casi completa es una
+**predicción degenerada**: forma parte del rendimiento del método y permanece
+en el denominador.
+
+Para predicción vacía contra ground truth no vacío, Jaccard, Dice, sensibilidad
+y boundary-F1 son 0; HD95 es indefinido (`null`). Especificidad y accuracy
+pueden ser altas por el predominio del fondo y no deben interpretarse solas.
+`quality_flags.csv` conserva estas salidas, incluidas máscaras vacías de
+backends neuronales aunque no emitan `failure_code`; `failures.csv` queda
+reservado para fallos técnicos.
 
 ## Resultados, web y métricas
 
@@ -221,7 +252,10 @@ Abra la URL proxy que ofrezca Open OnDemand, no exponga el puerto públicamente.
 La web conserva el revisor histórico y muestra runs, artefactos, fallos,
 fallbacks y métricas. P0 conserva máscara FOV cruda/corregida; toda máscara final
 común se intersecta con FOV y la piel limpia excluye fuera de FOV, lesión y
-vello. Los tests sintéticos cubren piel oscura sin marco, FOV circular y bordes.
+vello. Los reportes separan `technical_failures`, `degenerate_predictions`,
+`prediction_empty` y `prediction_nearly_complete`. Los fallos técnicos se
+excluyen hasta repararse; las predicciones degeneradas sí participan en las
+métricas. Los tests sintéticos cubren además las convenciones de máscaras vacías.
 
 ## Solución de problemas y limpieza segura
 

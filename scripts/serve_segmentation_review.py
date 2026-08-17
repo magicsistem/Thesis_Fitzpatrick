@@ -32,6 +32,7 @@ from thesis_fitzpatrick.masks import (  # noqa: E402
 )
 from thesis_fitzpatrick.benchmark import (  # noqa: E402
     evaluation_registry,
+    is_fatal_backend_failure,
     load_benchmark_methods,
     load_json,
     validate_dataset_registry,
@@ -158,6 +159,20 @@ def benchmark_run(run_id: str) -> dict:
     results = []
     for path in sorted((root / "predictions").rglob("result.json")):
         payload = load_json(path)
+        failure_code = payload.get("failure_code") or (payload.get("backend") or {}).get("failure_code")
+        failure_is_fatal = is_fatal_backend_failure(failure_code)
+        flags = (payload.get("metrics") or {}).get("flags") or {}
+        degenerate = (not failure_is_fatal) and bool(
+            failure_code
+            or flags.get("prediction_empty")
+            or flags.get("prediction_nearly_complete")
+        )
+        payload["failure_is_fatal"] = failure_is_fatal
+        payload["outcome"] = (
+            "technical_failure" if failure_is_fatal
+            else "degenerate_prediction" if degenerate
+            else "ok"
+        )
         relative_root = path.parent.relative_to(root).as_posix()
         artifacts = {}
         if payload.get("original_preview") and (root / payload["original_preview"]).is_file():

@@ -16,6 +16,11 @@ VALID_GRABCUT_LABELS = {cv2.GC_BGD, cv2.GC_FGD, cv2.GC_PR_BGD, cv2.GC_PR_FGD}
 
 
 def classify_mask_failure(mask: np.ndarray, nearly_complete_fraction: float = 0.98) -> tuple[str | None, list[str]]:
+    """Classify GrabCut output diagnostics.
+
+    Empty/nearly-complete outputs are diagnostic quality codes, not execution
+    failures. The benchmark decides separately whether a code is fatal.
+    """
     fraction = float(np.mean(mask > 0))
     if not np.all(np.isfinite(mask)):
         return "nan_or_inf", ["GrabCut produced NaN or infinity."]

@@ -19,7 +19,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from thesis_fitzpatrick.benchmark import ImageInput, atomic_write_json, content_hash, load_json, validate_dataset_registry  # noqa: E402
+from thesis_fitzpatrick.benchmark import ImageInput, atomic_write_json, content_hash, is_fatal_backend_failure, load_json, validate_dataset_registry  # noqa: E402
 from thesis_fitzpatrick.grabcut import common_postprocess, grabcut_classic, grabcut_robust  # noqa: E402
 from thesis_fitzpatrick.metrics import segmentation_metrics  # noqa: E402
 from thesis_fitzpatrick.preprocessing import atomic_write_png, detector_from_config, run_p0  # noqa: E402
@@ -150,7 +150,8 @@ def main() -> None:
                             method, adapter_input, output / "native_mask.png",
                             warmup=args.warmup, repetitions=args.repetitions,
                         )
-                    if backend.failure_code:
+                    fatal_backend_failure = is_fatal_backend_failure(backend.failure_code)
+                    if fatal_backend_failure:
                         final = np.zeros(rgb.shape[:2], dtype=np.uint8)
                         post = {"skipped": True, "reason": backend.failure_code}
                     elif condition == "C0":
@@ -169,7 +170,7 @@ def main() -> None:
                         hair_mask=p0.hair_mask if p0 else None,
                         threshold_jaccard_cutoff=config["metrics"]["threshold_jaccard_cutoff"],
                         boundary_tolerance_diagonal_fraction=config["metrics"]["boundary_tolerance_diagonal_fraction"],
-                    ) if gt is not None else None
+                    ) if gt is not None and not fatal_backend_failure else None
                     atomic_write_json(output / "result.json", {
                         "schema_version": 1, "condition": condition, "dataset_id": args.dataset, "split": args.split, "method_id": method["method_id"], "image_id": image.image_id,
                         "original_preview": f"inputs/{image.image_id}.jpg" if config.get("store_web_previews", True) else None,
@@ -180,14 +181,16 @@ def main() -> None:
                         "p0_cache_key": p0.cache_key if p0 else None, "p0_fallback_used": p0.fallback_used if p0 else False, "postprocessing": post, "metrics": metrics,
                         "end_to_end_time_ms": (time.perf_counter() - started_method) * 1000 + (sum(p0.timings_ms.values()) if p0 else 0),
                         "failure_code": backend.failure_code,
+                        "failure_is_fatal": fatal_backend_failure,
+                        "outcome": "technical_failure" if fatal_backend_failure else "degenerate_prediction" if backend.failure_code or ((metrics or {}).get("flags") or {}).get("prediction_empty") or ((metrics or {}).get("flags") or {}).get("prediction_nearly_complete") else "ok",
                     })
-                    if backend.failure_code:
+                    if fatal_backend_failure:
                         manifest["failures"].append({"condition": condition, "method_id": method["method_id"], "image_id": image.image_id, "failure_code": backend.failure_code})
                     completed += 1
                     eta = (time.perf_counter() - started) / completed * (summary["executions"] - completed)
                     print(f"[{completed}/{summary['executions']}] {condition} {method['method_id']} {image.image_id} · ETA {eta:.1f}s", flush=True)
         if manifest["failures"]:
-            raise RuntimeError(f"Ablación incompleta: {len(manifest['failures'])} ejecuciones de backend fallaron")
+            raise RuntimeError(f"Ablación incompleta: {len(manifest['failures'])} fallos técnicos requieren reejecución")
         manifest["status"] = "completed"
         manifest["completed_utc"] = datetime.now(timezone.utc).isoformat()
         write_report(run_directory, repetitions=config["metrics"]["bootstrap_repetitions"], seed=config["seed"])
