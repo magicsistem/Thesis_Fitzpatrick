@@ -95,6 +95,92 @@ class ReviewServerTests(unittest.TestCase):
         self.assertIn("Fallos técnicos", app)
         self.assertIn("degenerate_predictions", app)
         self.assertIn("failure_is_fatal", app)
+        self.assertIn("post05", app)
+        self.assertIn("schema 2", app)
+
+    def test_post05_contract_resolves_top3_five_runs_and_192_cases(self) -> None:
+        contract = review.post05_contract()
+        self.assertEqual(contract["top3"], ["S01", "S10", "S14"])
+        self.assertEqual(set(contract["runs"]), set(review.POST05_CONDITIONS))
+        state = review.post05_state()
+        self.assertEqual(len(state["cases"]), 192)
+        self.assertTrue(all(set(item["conditions"]) == set(review.POST05_CONDITIONS) for item in state["cases"]))
+
+    def test_post05_state_and_observation_endpoints_are_readable(self) -> None:
+        with urlopen(f"{self.base_url}/api/post05/state") as response:
+            state = json.load(response)
+        with urlopen(f"{self.base_url}/api/post05/observations") as response:
+            observations = json.load(response)
+        self.assertEqual(len(state["cases"]), 192)
+        self.assertEqual(state["contract"]["top3"], ["S01", "S10", "S14"])
+        self.assertIn("history", observations)
+
+    def test_post05_contract_rejects_selection_hash_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            bad = Path(directory) / "selection.json"
+            payload = json.loads(review.POST05_SELECTION.read_text(encoding="utf-8"))
+            payload["top3"] = ["S02", "S10", "S14"]
+            bad.write_text(json.dumps(payload), encoding="utf-8")
+            with patch.object(review, "POST05_SELECTION", bad):
+                with self.assertRaisesRegex(ValueError, "identity_hash"):
+                    review.post05_contract()
+
+    def test_post05_observation_is_schema2_append_only_and_history_is_readable(self) -> None:
+        case = review.post05_state()["cases"][0]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with patch.object(review, "POST05_REVIEW_DIR", root / "review"), patch.object(review, "POST05_OBSERVATIONS", root / "review" / "observations.jsonl"):
+                request = {"actor": "TEST_post05", "method_id": case["method_id"], "image_id": case["image_id"], "conditions": case["conditions"], "assessment": {"fov_clipping_severity": 1, "postprocessing_damage_severity": 0, "no_post_artifact_severity": 2, "roi_yolo_issue": "no", "visual_preference": "NO_FOV", "general_status": "reviewed_ok", "note": "prueba 1"}}
+                first = review.save_post05_observation(request)
+                request["assessment"] = {**request["assessment"], "note": "prueba 2"}
+                second = review.save_post05_observation(request)
+                payload = review.post05_observations()
+                lines = (root / "review" / "observations.jsonl").read_text(encoding="utf-8").splitlines()
+            self.assertEqual(first["schema_version"], 2)
+            self.assertEqual(second["schema_version"], 2)
+            self.assertEqual(len(lines), 2)
+            self.assertEqual(payload["reviewed"], 1)
+            self.assertEqual(payload["latest"][f"{case['method_id']}::{case['image_id']}"]["assessment"]["note"], "prueba 2")
+
+    def test_post05_legacy_and_other_freeze_observations_do_not_count(self) -> None:
+        contract = review.post05_contract()
+        cases = review._post05_case_index(contract)
+        case = next(iter(cases.values()))
+        base = {
+            "method_id": case["method_id"],
+            "image_id": case["image_id"],
+            "integrity": {
+                "freeze_identity_hash": "old-freeze",
+                "selection_identity_hash": contract["selection_identity_hash"],
+                "yolo_final_identity_hash": contract["yolo_final_identity_hash"],
+            },
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "observations.jsonl"
+            path.write_text(
+                json.dumps({"schema_version": 1, **base}) + "\n" +
+                json.dumps({"schema_version": 2, **base}) + "\n",
+                encoding="utf-8",
+            )
+            with patch.object(review, "POST05_OBSERVATIONS", path):
+                payload = review.post05_observations(contract, cases)
+        self.assertEqual(len(payload["history"]), 2)
+        self.assertEqual(payload["reviewed"], 0)
+        self.assertEqual(payload["latest"], {})
+
+    def test_post05_observation_rejects_exclusion_and_invalid_severity(self) -> None:
+        case = review.post05_state()["cases"][0]
+        base = {"actor": "TEST_post05", "method_id": case["method_id"], "image_id": case["image_id"], "conditions": case["conditions"], "assessment": {"fov_clipping_severity": 4, "postprocessing_damage_severity": 0, "no_post_artifact_severity": 0, "roi_yolo_issue": "no", "visual_preference": "FULL", "general_status": "reviewed_ok", "note": "test"}}
+        with self.assertRaisesRegex(ValueError, "debe ser"):
+            review.save_post05_observation(base)
+        base["assessment"] = {**base["assessment"], "visual_preference": "exclude"}
+        with self.assertRaisesRegex(ValueError, "visual_preference"):
+            review.save_post05_observation(base)
+
+    def test_post05_overlay_is_reproducible_visual_artifact(self) -> None:
+        case = review.post05_state()["cases"][0]
+        content = review.post05_overlay({"condition": "B1_FULL", "method_id": case["method_id"], "image_id": case["image_id"]})
+        self.assertEqual(content[:8], b"\x89PNG\r\n\x1a\n")
 
 
     def test_benchmark_run_exposes_clean_skin_artifact(self) -> None:

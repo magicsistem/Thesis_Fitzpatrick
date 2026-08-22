@@ -7,6 +7,7 @@ import base64
 import binascii
 import csv
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+import io
 import json
 import mimetypes
 import os
@@ -17,8 +18,10 @@ import shutil
 import subprocess
 import sys
 import time
+from datetime import datetime, timezone
 from urllib.parse import parse_qs, unquote, urlparse
 
+import numpy as np
 from PIL import Image
 
 from _project_paths import REPO_ROOT, require_within
@@ -35,6 +38,8 @@ from thesis_fitzpatrick.benchmark import (  # noqa: E402
     is_fatal_backend_failure,
     load_benchmark_methods,
     load_json,
+    content_hash,
+    sha256_file,
     validate_dataset_registry,
 )
 from thesis_fitzpatrick.annotations import project_status, save_mask_version  # noqa: E402
@@ -54,6 +59,13 @@ BENCHMARK_CONFIG = REPO_ROOT / "configs" / "benchmark" / "default.json"
 DATASET_CONFIG = REPO_ROOT / "configs" / "benchmark" / "datasets.json"
 BENCHMARK_ARTIFACT_ROOT = REPO_ROOT / "results" / "benchmark_v1"
 ANNOTATION_PROJECT = REPO_ROOT / "data" / "interim" / "fitzpatrick_annotations_v1"
+POST05_REVIEW_DIR = BENCHMARK_ARTIFACT_ROOT / "review"
+POST05_OBSERVATIONS = POST05_REVIEW_DIR / "post05_observations.jsonl"
+POST05_FREEZE = BENCHMARK_ARTIFACT_ROOT / "post05_scientific_freeze.json"
+POST05_SELECTION = BENCHMARK_ARTIFACT_ROOT / "post05_selection" / "segmenter_selection.json"
+POST05_YOLO_FREEZE = BENCHMARK_ARTIFACT_ROOT / "yolo" / "final" / "frozen.json"
+POST05_CONDITIONS = ("B1_FULL", "B1_NO_HAIR", "B1_NO_YOLO", "B1_NO_FOV", "B1_NO_POST")
+POST05_TOP3 = ("S01", "S10", "S14")
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp"}
 FITZPATRICK_TYPES = ("I", "II", "III", "IV", "V", "VI")
 
@@ -179,7 +191,10 @@ def benchmark_run(run_id: str) -> dict:
             artifacts["original_image.jpg"] = f"/files/benchmark/{run_id}/{payload['original_preview']}"
         elif payload.get("image_id") in local_image_urls:
             artifacts["original_image.jpg"] = local_image_urls[payload["image_id"]]
+        elif (root / "inputs" / f"{payload.get('image_id')}.jpg").is_file():
+            artifacts["original_image.jpg"] = f"/files/benchmark/{run_id}/inputs/{payload['image_id']}.jpg"
         if payload.get("ground_truth_preview") and (root / payload["ground_truth_preview"]).is_file(): artifacts["ground_truth.png"] = f"/files/benchmark/{run_id}/{payload['ground_truth_preview']}"
+        elif (root / "inputs" / f"{payload.get('image_id')}.ground_truth.png").is_file(): artifacts["ground_truth.png"] = f"/files/benchmark/{run_id}/inputs/{payload['image_id']}.ground_truth.png"
         if payload.get("overlay_preview") and (path.parent / payload["overlay_preview"]).is_file(): artifacts["prediction_overlay.jpg"] = f"/files/benchmark/{run_id}/{relative_root}/{payload['overlay_preview']}"
         for name in ("native_mask.png", "pre_postprocess_mask.png", "final_mask.png", "clean_skin_mask.png", "raw_probability.npy"):
             if (path.parent / name).is_file(): artifacts[name] = f"/files/benchmark/{run_id}/{relative_root}/{name}"
@@ -189,8 +204,271 @@ def benchmark_run(run_id: str) -> dict:
             for name in ("fov_mask.png", "hair_mask.png", "segmentation_input.png", "yolo_overlay.png", "roi_input.png", "yolo_bbox.json"):
                 if (p0_root / name).is_file(): artifacts[name] = f"/files/artifact/preprocessing/{payload.get('dataset_id') or manifest.get('dataset')}/{payload['image_id']}/{cache_key}/{name}"
         payload["artifacts"] = artifacts
+        payload["review_identity"] = {
+            "run_id": run_id,
+            "method_id": payload.get("method_id"),
+            "image_id": payload.get("image_id"),
+            "condition": payload.get("condition") or payload.get("evaluation"),
+            "hashes": {
+                key: value for key, value in {
+                    "configuration_hash": manifest.get("configuration_hash"),
+                    "dataset_manifest_hash": manifest.get("dataset_manifest_hash"),
+                    "image_sha256": (payload.get("metadata") or {}).get("image_sha256"),
+                    "mask_sha256": (payload.get("metadata") or {}).get("mask_sha256"),
+                    "yolo_final_identity_hash": manifest.get("yolo_final_identity_hash"),
+                }.items() if value
+            },
+        }
         results.append(payload)
     return {"manifest": manifest, "report": report, "results": results}
+
+
+def _freeze_path(path: Path, label: str) -> Path:
+    if path.is_file():
+        return path
+    raise ValueError(f"No se encontró {label}: {path}")
+
+
+def _run_path(value: str, label: str) -> Path:
+    candidate = Path(value)
+    if candidate.is_file():
+        return candidate
+    candidate = BENCHMARK_ARTIFACT_ROOT / "runs" / candidate.name
+    if not (candidate / "run_manifest.json").is_file():
+        raise ValueError(f"No se encontró el run congelado de {label}: {value}")
+    return candidate
+
+
+def _without_identity(payload: dict) -> dict:
+    copy = dict(payload)
+    copy.pop("identity_hash", None)
+    return copy
+
+
+def post05_contract() -> dict:
+    freeze_path = _freeze_path(POST05_FREEZE, "scientific freeze")
+    selection_path = _freeze_path(POST05_SELECTION, "selección congelada")
+    yolo_path = _freeze_path(POST05_YOLO_FREEZE, "YOLO final congelado")
+    freeze = load_json(freeze_path)
+    selection = load_json(selection_path)
+    yolo = load_json(yolo_path)
+    if freeze.get("status") != "frozen_before_mskcc" or freeze.get("schema_version") != 1:
+        raise ValueError("El scientific freeze post-0.5 no está congelado o tiene un schema incompatible")
+    if freeze.get("identity_hash") != content_hash(_without_identity(freeze)):
+        raise ValueError("identity_hash del scientific freeze no coincide")
+    if selection.get("identity_hash") != content_hash(_without_identity(selection)):
+        raise ValueError("identity_hash de la selección congelada no coincide")
+    if yolo.get("identity_hash") != content_hash(_without_identity(yolo)):
+        raise ValueError("identity_hash del YOLO final no coincide")
+    if sha256_file(selection_path) != freeze.get("selection_manifest_sha256"):
+        raise ValueError("El hash de la selección no coincide con el scientific freeze")
+    if sha256_file(yolo_path) != freeze.get("final_yolo_manifest_sha256"):
+        raise ValueError("El hash del manifest YOLO no coincide con el scientific freeze")
+    if tuple(freeze.get("top3", ())) != POST05_TOP3 or tuple(selection.get("top3", ())) != POST05_TOP3:
+        raise ValueError("TOP-3 congelado incompatible: se esperaban S01, S10 y S14")
+    if selection.get("identity_hash") != freeze.get("selection_identity_hash"):
+        raise ValueError("La identidad de selección no coincide con el scientific freeze")
+    if yolo.get("identity_hash") != freeze.get("final_yolo_identity_hash") or yolo.get("identity_hash") != selection.get("yolo_final_identity_hash"):
+        raise ValueError("La identidad del YOLO final no coincide con los freezes")
+    if tuple(freeze.get("ablation_conditions", ())) != POST05_CONDITIONS:
+        raise ValueError("Los cinco tipos de ablación no coinciden con el scientific freeze")
+
+    run_specs = {}
+    expected_ablation_hashes = selection.get("ablation_run_manifest_sha256") or []
+    for index, value in enumerate(selection.get("ablation_runs") or []):
+        run_path = _run_path(value, f"ablación {index + 1}")
+        manifest_path = run_path / "run_manifest.json"
+        if index >= len(expected_ablation_hashes) or sha256_file(manifest_path) != expected_ablation_hashes[index]:
+            raise ValueError(f"El hash del manifest de ablación no coincide: {run_path.name}")
+        manifest = load_json(manifest_path)
+        condition = (manifest.get("conditions") or [None])[0]
+        if manifest.get("status") != "completed" or manifest.get("evaluation") != "post05_component_ablation" or condition not in POST05_CONDITIONS:
+            raise ValueError(f"Run post-0.5 inválido o incompleto: {run_path.name}")
+        if manifest.get("yolo_final_identity_hash") != yolo.get("identity_hash"):
+            raise ValueError(f"YOLO final inconsistente en {run_path.name}")
+        if condition in run_specs:
+            raise ValueError(f"Hay más de un run congelado para {condition}")
+        run_specs[condition] = {"run_id": run_path.name, "path": run_path, "manifest": manifest, "manifest_sha256": expected_ablation_hashes[index]}
+    if set(run_specs) != set(POST05_CONDITIONS):
+        raise ValueError(f"Faltan runs post-0.5 congelados: {sorted(set(POST05_CONDITIONS) - set(run_specs))}")
+    return {
+        "schema_version": 1,
+        "freeze_identity_hash": freeze["identity_hash"],
+        "selection_identity_hash": selection["identity_hash"],
+        "yolo_final_identity_hash": yolo["identity_hash"],
+        "top3": list(POST05_TOP3),
+        "top3_resources": freeze.get("top3_resources", {}),
+        "conditions": list(POST05_CONDITIONS),
+        "runs": {condition: {key: value for key, value in spec.items() if key != "path" and key != "manifest"} | {"run_id": spec["run_id"]} for condition, spec in run_specs.items()},
+        "run_paths": run_specs,
+        "freeze": freeze,
+        "selection": selection,
+        "yolo": yolo,
+    }
+
+
+def post05_observations(contract: dict | None = None, cases: dict[tuple[str, str], dict] | None = None) -> dict:
+    contract = contract or post05_contract()
+    cases = cases or _post05_case_index(contract)
+    history = []
+    if POST05_OBSERVATIONS.is_file():
+        for line in POST05_OBSERVATIONS.read_text(encoding="utf-8").splitlines():
+            try:
+                value = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if value.get("schema_version") in {1, 2}:
+                history.append(value)
+    current_integrity = {
+        "freeze_identity_hash": contract["freeze_identity_hash"],
+        "selection_identity_hash": contract["selection_identity_hash"],
+        "yolo_final_identity_hash": contract["yolo_final_identity_hash"],
+    }
+    valid_keys = set(cases)
+    current_history = []
+    for value in history:
+        if value.get("schema_version") != 2:
+            continue
+        if (value.get("method_id"), value.get("image_id")) not in valid_keys:
+            continue
+        integrity = value.get("integrity") or {}
+        if any(integrity.get(key) != expected for key, expected in current_integrity.items()):
+            continue
+        current_history.append(value)
+    latest = {}
+    for value in current_history:
+        key = (value.get("method_id"), value.get("image_id"))
+        if key[0] and key[1]:
+            latest["::".join(key)] = value
+    return {"history": history, "current_history": current_history, "latest": latest, "reviewed": len(latest)}
+
+
+def _post05_case_index(contract: dict) -> dict[tuple[str, str], dict]:
+    cases: dict[tuple[str, str], dict] = {}
+    for condition in POST05_CONDITIONS:
+        run_id = contract["run_paths"][condition]["run_id"]
+        payload = benchmark_run(run_id)
+        for item in payload["results"]:
+            if item.get("method_id") not in POST05_TOP3:
+                continue
+            key = (item["method_id"], item["image_id"])
+            entry = cases.setdefault(key, {"method_id": item["method_id"], "image_id": item["image_id"], "conditions": {}})
+            entry["conditions"][condition] = {
+                "run_id": run_id,
+                "metrics": item.get("metrics"),
+                "artifacts": item.get("artifacts"),
+                "review_identity": item.get("review_identity"),
+                "hashes": {
+                    "manifest_sha256": contract["run_paths"][condition]["manifest_sha256"],
+                    "configuration_hash": contract["run_paths"][condition]["manifest"].get("configuration_hash"),
+                    "dataset_manifest_hash": contract["run_paths"][condition]["manifest"].get("dataset_manifest_hash"),
+                    "image_sha256": (item.get("metadata") or {}).get("image_sha256"),
+                    "mask_sha256": (item.get("metadata") or {}).get("mask_sha256"),
+                    "yolo_final_identity_hash": contract["yolo_final_identity_hash"],
+                    "freeze_identity_hash": contract["freeze_identity_hash"],
+                    "selection_identity_hash": contract["selection_identity_hash"],
+                },
+            }
+    expected = len(POST05_TOP3) * 64
+    if len(cases) != expected or any(set(value["conditions"]) != set(POST05_CONDITIONS) for value in cases.values()):
+        raise ValueError(f"Cobertura post-0.5 incompleta: {len(cases)} casos; se esperaban {expected} con cinco condiciones")
+    return cases
+
+
+def post05_state() -> dict:
+    contract = post05_contract()
+    cases = _post05_case_index(contract)
+    selection_rows = {row["method_id"]: row for row in contract["selection"].get("ranking", []) if row.get("method_id") in POST05_TOP3}
+    return {
+        "contract": {key: value for key, value in contract.items() if key not in {"run_paths", "freeze", "selection", "yolo"}},
+        "summary": [selection_rows[method] for method in POST05_TOP3],
+        "cases": list(cases.values()),
+        "observations": post05_observations(contract, cases),
+    }
+
+
+def _mask_boundary(mask: np.ndarray) -> np.ndarray:
+    binary = mask > 0
+    inner = binary.copy()
+    inner[1:] &= binary[:-1]
+    inner[:-1] &= binary[1:]
+    inner[:, 1:] &= binary[:, :-1]
+    inner[:, :-1] &= binary[:, 1:]
+    return binary & ~inner
+
+
+def post05_overlay(query: dict) -> bytes:
+    contract = post05_contract()
+    condition = query.get("condition", "B1_FULL")
+    if condition not in POST05_CONDITIONS:
+        raise ValueError("condición post-0.5 inválida")
+    if query.get("method_id") not in POST05_TOP3:
+        raise ValueError("method_id no pertenece al TOP-3 congelado")
+    run_id = contract["run_paths"][condition]["run_id"]
+    root = contract["run_paths"][condition]["path"]
+    image_id = query.get("image_id", "")
+    result_path = next(root.glob(f"predictions/{condition}/{query['method_id']}/{image_id}/result.json"), None)
+    if result_path is None:
+        raise ValueError("caso post-0.5 no encontrado")
+    result = load_json(result_path)
+    original = Image.open(root / result.get("original_preview", f"inputs/{image_id}.jpg")).convert("RGB")
+    gt = Image.open(root / result.get("ground_truth_preview", f"inputs/{image_id}.ground_truth.png")).convert("L").resize(original.size, Image.Resampling.NEAREST)
+    pred = Image.open(result_path.parent / "final_mask.png").convert("L").resize(original.size, Image.Resampling.NEAREST)
+    canvas = np.asarray(original).copy()
+    for mask, color in ((_mask_boundary(np.asarray(gt)), (0, 255, 0)), (_mask_boundary(np.asarray(pred)), (255, 64, 32))):
+        canvas[mask] = (0.35 * canvas[mask] + 0.65 * np.asarray(color)).astype(np.uint8)
+    stream = io.BytesIO()
+    Image.fromarray(canvas).save(stream, format="PNG")
+    return stream.getvalue()
+
+
+def save_post05_observation(request: dict) -> dict:
+    required = ("actor", "method_id", "image_id", "conditions", "assessment")
+    if any(not request.get(key) for key in required):
+        raise ValueError("actor, method_id, image_id, conditions y assessment son obligatorios")
+    contract = post05_contract()
+    cases = _post05_case_index(contract)
+    key = (str(request["method_id"]), str(request["image_id"]))
+    if key not in cases:
+        raise ValueError("method_id + image_id no pertenecen a los 192 casos congelados")
+    conditions = request["conditions"]
+    if set(conditions) != set(POST05_CONDITIONS):
+        raise ValueError("La observación debe conservar las cinco condiciones post-0.5")
+    for condition in POST05_CONDITIONS:
+        if conditions[condition].get("run_id") != contract["run_paths"][condition]["run_id"]:
+            raise ValueError(f"run_id inconsistente para {condition}")
+    assessment = request["assessment"]
+    allowed = {
+        "roi_yolo_issue": {"yes", "no", "uncertain"},
+        "visual_preference": {"FULL", "NO_FOV", "NO_POST", "tie_unclear"},
+        "general_status": {"reviewed_ok", "needs_attention"},
+    }
+    for key_name, values in allowed.items():
+        if assessment.get(key_name) not in values:
+            raise ValueError(f"assessment.{key_name} inválido")
+    for key_name in ("fov_clipping_severity", "postprocessing_damage_severity", "no_post_artifact_severity"):
+        if assessment.get(key_name) not in {0, 1, 2, 3}:
+            raise ValueError(f"assessment.{key_name} debe ser 0, 1, 2 o 3")
+    if not str(assessment.get("note", "")).strip():
+        raise ValueError("assessment.note es obligatorio")
+    canonical_conditions = {
+        condition: {"run_id": contract["run_paths"][condition]["run_id"], "hashes": cases[key]["conditions"][condition]["hashes"]}
+        for condition in POST05_CONDITIONS
+    }
+    record = {
+        "schema_version": 2,
+        "created_utc": datetime.now(timezone.utc).isoformat(),
+        "actor": str(request["actor"]).strip(),
+        "method_id": key[0],
+        "image_id": key[1],
+        "conditions": canonical_conditions,
+        "assessment": {**assessment, "note": str(assessment["note"]).strip()},
+        "integrity": {"freeze_identity_hash": contract["freeze_identity_hash"], "selection_identity_hash": contract["selection_identity_hash"], "yolo_final_identity_hash": contract["yolo_final_identity_hash"]},
+    }
+    POST05_REVIEW_DIR.mkdir(parents=True, exist_ok=True)
+    with POST05_OBSERVATIONS.open("a", encoding="utf-8") as stream:
+        stream.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+    return record
 
 
 def load_image_metadata() -> dict[str, dict]:
@@ -592,6 +870,24 @@ class ReviewHandler(SimpleHTTPRequestHandler):
             try: self._json(benchmark_run(query.get("run_id", [""])[0]))
             except (ValueError, FileNotFoundError) as exc: self._json({"error": str(exc)}, status=404)
             return
+        if path == "/api/post05/state":
+            try: self._json(post05_state())
+            except (ValueError, FileNotFoundError, KeyError, OSError) as exc: self._json({"error": str(exc)}, status=409)
+            return
+        if path == "/api/post05/observations":
+            self._json(post05_observations())
+            return
+        if path == "/api/post05/overlay":
+            try:
+                content = post05_overlay({key: values[0] for key, values in query.items() if values})
+                self.send_response(200)
+                self.send_header("Content-Type", "image/png")
+                self.send_header("Content-Length", str(len(content)))
+                self.end_headers()
+                self.wfile.write(content)
+            except (ValueError, FileNotFoundError, KeyError, OSError) as exc:
+                self._json({"error": str(exc)}, status=409)
+            return
         if path == "/api/annotations/state":
             if not (ANNOTATION_PROJECT / "project.json").is_file(): self._json({"available": False, "message": "Inicialice el proyecto con scripts/benchmark/annotations.py init"})
             else:
@@ -623,12 +919,14 @@ class ReviewHandler(SimpleHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802
         path = urlparse(self.path).path
-        if path not in {"/api/infer", "/api/sample", "/api/annotations/save"}:
+        if path not in {"/api/infer", "/api/sample", "/api/annotations/save", "/api/post05/observation"}:
             self.send_error(404)
             return
         try:
             length = int(self.headers.get("Content-Length", "0"))
             request = json.loads(self.rfile.read(length))
+            if path == "/api/post05/observation":
+                self._json({"saved": save_post05_observation(request)}); return
             if path == "/api/annotations/save":
                 if not (ANNOTATION_PROJECT / "project.json").is_file(): raise ValueError("Proyecto de anotación no inicializado")
                 encoded = str(request.get("png_data_url", ""))

@@ -41,6 +41,29 @@
       <div id="models" class="model-grid"></div>
     </section>
 
+    <section aria-labelledby="post05-title">
+      <div class="section-heading"><div><span class="step">0.5+</span><h2 id="post05-title">Inspección visual post-Fase 0.5</h2></div></div>
+      <p class="notice">Comparación congelada por imagen para S01, S10 y S14. Esta vista solo lee resultados; las observaciones se guardan aparte.</p>
+      <div id="post05-runs" class="run-controls"></div>
+      <div id="post05-summary"></div>
+      <div id="post05-controls" class="run-controls">
+        <label>Método <select id="post05-method"></select></label>
+        <label>Imagen <select id="post05-image"></select></label>
+        <label>Orden <select id="post05-sort"><option value="no_fov_dice">Mayor |ΔDice| NO_FOV</option><option value="no_post_dice">Mayor |ΔDice| NO_POST</option><option value="no_fov_jaccard">Mayor |ΔJaccard| NO_FOV</option><option value="no_post_jaccard">Mayor |ΔJaccard| NO_POST</option><option value="no_fov_boundary">Mayor |ΔBoundary-F1| NO_FOV</option><option value="no_post_boundary">Mayor |ΔBoundary-F1| NO_POST</option><option value="no_fov_hd95">Mayor |ΔHD95| NO_FOV</option><option value="no_post_hd95">Mayor |ΔHD95| NO_POST</option><option value="image">image_id</option><option value="method">method_id</option></select></label>
+        <label>Delta mínimo <input id="post05-min-delta" type="number" min="0" step="0.01" value="0"></label>
+        <label>Estado <select id="post05-reviewed"><option value="">Todos</option><option value="reviewed">Revisados</option><option value="pending">Pendientes</option></select></label>
+        <label>Observación <select id="post05-review-filter"><option value="">Todas</option><option value="with">Con observación</option><option value="without">Sin observación</option></select></label>
+        <button id="post05-load" type="button">Cargar comparación</button>
+      </div>
+      <p id="post05-status" role="status">Buscando runs post-Fase 0.5…</p>
+      <div id="post05-view" hidden>
+        <div class="carousel-nav"><button id="post05-previous" class="secondary" type="button">Anterior</button><span id="post05-position"></span><button id="post05-next" class="secondary" type="button">Siguiente</button><button id="post05-next-pending" class="secondary" type="button">Siguiente pendiente</button></div>
+        <div class="run-controls"><label><input id="post05-toggle-B1_NO_HAIR" type="checkbox"> Mostrar NO_HAIR</label><label><input id="post05-toggle-B1_NO_YOLO" type="checkbox"> Mostrar NO_YOLO</label><label><input id="post05-overlay-enabled" type="checkbox"> Mostrar overlay</label><label>Overlay <select id="post05-overlay-condition"><option>B1_FULL</option><option>B1_NO_FOV</option><option>B1_NO_POST</option></select></label></div>
+        <div id="post05-case"></div>
+        <div class="annotation-controls post05-observation"><label>Identidad <input id="post05-actor" required></label><label>FOV clipping <select id="post05-fov-severity"><option>0</option><option>1</option><option>2</option><option>3</option></select></label><label>Daño post <select id="post05-post-severity"><option>0</option><option>1</option><option>2</option><option>3</option></select></label><label>Artefacto NO_POST <select id="post05-no-post-severity"><option>0</option><option>1</option><option>2</option><option>3</option></select></label><label>ROI/YOLO <select id="post05-roi-issue"><option>no</option><option>yes</option><option>uncertain</option></select></label><label>Preferencia <select id="post05-preference"><option>FULL</option><option>NO_FOV</option><option>NO_POST</option><option>tie_unclear</option></select></label><label>Estado <select id="post05-general-status"><option>reviewed_ok</option><option>needs_attention</option></select></label><label>Nota <input id="post05-note" required></label><button id="post05-save" type="button">Guardar observación</button></div>
+      </div>
+    </section>
+
     <section aria-labelledby="images-title">
       <div class="section-heading">
         <div><span class="step">2</span><h2 id="images-title">Imágenes</h2></div>

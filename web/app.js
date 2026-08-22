@@ -1,6 +1,7 @@
 const state = {
   models: [], images: [], results: [], summaries: [], pool: {}, benchmark: {},
-  slide: 0, activeModelId: "", benchmarkRuns: [], annotation: null
+  slide: 0, activeModelId: "", benchmarkRuns: [], annotation: null,
+  post05: {runs: {}, cases: [], index: 0}
 };
 const $ = (selector) => document.querySelector(selector);
 
@@ -69,6 +70,89 @@ async function loadRunIndex() {
   $("#ablation-run").innerHTML = options((run) => run.evaluation === "ablation");
   const sealed = state.benchmarkRuns.filter((run) => String(run.run_id).startsWith("sealed-"));
   $("#sealed-runs").innerHTML = sealed.length ? `<h3>Runs sellados</h3>${sealed.map((run) => `<p><strong>${escapeHtml(run.run_id)}</strong> · ${escapeHtml(run.status)}</p>`).join("")}` : "<p>No existe ninguna ejecución sellada.</p>";
+}
+
+async function initializePost05() {
+  const response = await fetch("/api/post05/state");
+  const payload = await response.json();
+  if (!response.ok) throw new Error(payload.error || "No se pudo validar el scientific freeze post-0.5");
+  state.post05 = Object.assign(state.post05, payload, {index: 0});
+  $("#post05-runs").innerHTML = "<p class='notice'><strong>Runs resueltos por freeze:</strong> " + Object.entries(payload.contract.runs).map(([condition, run]) => condition + ": " + escapeHtml(run.run_id)).join(" · ") + "<br><small>Freeze " + escapeHtml(payload.contract.freeze_identity_hash) + " · selección " + escapeHtml(payload.contract.selection_identity_hash) + " · YOLO " + escapeHtml(payload.contract.yolo_final_identity_hash) + "</small></p>";
+  $("#post05-summary").innerHTML = "<h3>Resumen congelado TOP-3</h3><div class='table-wrap'><table><thead><tr><th>Rank</th><th>Método</th><th>Score /100</th><th>Region /35</th><th>Boundary /20</th><th>Stability /15</th><th>Reliability /15</th><th>P0 /15</th><th>Dice</th><th>Jaccard</th><th>Boundary-F1</th><th>HD95 norm.</th><th>Dice IQR</th><th>Degeneradas</th><th>Fallos técnicos</th><th>Checkpoint</th><th>SHA256</th></tr></thead><tbody>" + payload.summary.map((row) => { const resource = payload.contract.top3_resources[row.method_id] || {}; return "<tr><td>" + row.rank + "</td><td>" + escapeHtml(row.method_id) + "</td><td>" + post05Metric(row.score) + "</td><td>" + post05Metric(row.components.region) + "</td><td>" + post05Metric(row.components.boundary) + "</td><td>" + post05Metric(row.components.stability) + "</td><td>" + post05Metric(row.components.reliability) + "</td><td>" + post05Metric(row.components.p0_robustness) + "</td><td>" + post05Metric(row.raw.dice_mean) + "</td><td>" + post05Metric(row.raw.jaccard_mean) + "</td><td>" + post05Metric(row.raw.boundary_f1_mean) + "</td><td>" + post05Metric(row.raw.hd95_normalized_mean) + "</td><td>" + post05Metric(row.raw.dice_iqr) + "</td><td>" + post05Metric(row.raw.degenerate_prediction_rate) + "</td><td>" + post05Metric(row.raw.technical_failure_rate) + "</td><td class='hash-cell'>" + escapeHtml(resource.path) + "</td><td class='hash-cell'>" + escapeHtml(resource.sha256) + "</td></tr>"; }).join("") + "</tbody></table></div>";
+  $("#post05-controls").hidden = false;
+  populatePost05Filters();
+  $("#post05-status").textContent = "Revisados: " + payload.observations.reviewed + " / " + payload.cases.length + " · Pendientes: " + (payload.cases.length - payload.observations.reviewed);
+  loadPost05();
+}
+
+function post05Delta(item, condition, metric) {
+  const full = item.conditions.B1_FULL && item.conditions.B1_FULL.metrics && item.conditions.B1_FULL.metrics[metric];
+  const variant = item.conditions[condition] && item.conditions[condition].metrics && item.conditions[condition].metrics[metric];
+  return Number.isFinite(Number(full)) && Number.isFinite(Number(variant)) ? Number(variant) - Number(full) : null;
+}
+
+function post05FilteredCases() {
+  const method = $("#post05-method").value, image = $("#post05-image").value, latest = state.post05.observations.latest || {};
+  let cases = state.post05.cases.filter((item) => (!method || item.method_id === method) && (!image || item.image_id === image));
+  const hasReview = (item) => Boolean(latest[item.method_id + "::" + item.image_id]);
+  const reviewed = $("#post05-reviewed").value, reviewFilter = $("#post05-review-filter").value;
+  if (reviewed === "reviewed" || reviewFilter === "with") cases = cases.filter(hasReview);
+  if (reviewed === "pending" || reviewFilter === "without") cases = cases.filter((item) => !hasReview(item));
+  const min = Number($("#post05-min-delta").value) || 0;
+  if (min) cases = cases.filter((item) => Math.max(Math.abs(post05Delta(item, "B1_NO_FOV", "dice") || 0), Math.abs(post05Delta(item, "B1_NO_POST", "dice") || 0)) >= min);
+  const sort = $("#post05-sort").value;
+  const sortSpec = {
+    no_fov_dice:["B1_NO_FOV","dice"], no_post_dice:["B1_NO_POST","dice"],
+    no_fov_jaccard:["B1_NO_FOV","jaccard"], no_post_jaccard:["B1_NO_POST","jaccard"],
+    no_fov_boundary:["B1_NO_FOV","boundary_f1"], no_post_boundary:["B1_NO_POST","boundary_f1"],
+    no_fov_hd95:["B1_NO_FOV","hd95_normalized"], no_post_hd95:["B1_NO_POST","hd95_normalized"]
+  }[sort];
+  return cases.sort((a, b) => {
+    if (sort === "image") return a.image_id.localeCompare(b.image_id);
+    if (sort === "method") return (a.method_id + a.image_id).localeCompare(b.method_id + b.image_id);
+    const spec = sortSpec || ["B1_NO_FOV","dice"];
+    return Math.abs(post05Delta(b, spec[0], spec[1]) || 0) - Math.abs(post05Delta(a, spec[0], spec[1]) || 0);
+  });
+}
+
+function populatePost05Filters() {
+  $("#post05-method").innerHTML = "<option value=''>Todos</option>" + state.post05.contract.top3.map((value) => "<option>" + value + "</option>").join("");
+  $("#post05-image").innerHTML = "<option value=''>Todas</option>" + [...new Set(state.post05.cases.map((item) => item.image_id))].sort().map((value) => "<option>" + escapeHtml(value) + "</option>").join("");
+}
+
+function renderPost05Case() {
+  const cases = state.post05.filteredCases || [];
+  if (!cases.length) { $("#post05-case").innerHTML = "<p class='notice'>No hay casos con estos filtros.</p>"; return; }
+  const current = cases[state.post05.index], byCondition = current.conditions, full = byCondition.B1_FULL;
+  $("#post05-position").textContent = (state.post05.index + 1) + " / " + cases.length;
+  $("#post05-previous").disabled = state.post05.index === 0;
+  $("#post05-next").disabled = state.post05.index === cases.length - 1;
+  const visible = ["B1_FULL", "B1_NO_FOV", "B1_NO_POST"];
+  ["B1_NO_HAIR", "B1_NO_YOLO"].forEach((condition) => { if ($("#post05-toggle-" + condition).checked) visible.push(condition); });
+  const cards = visible.map((condition) => resultPanel(condition, byCondition[condition].artifacts && byCondition[condition].artifacts["final_mask.png"], condition + " " + current.image_id)).join("");
+  const metricRows = Object.entries(byCondition).map(([condition, item]) => "<tr><td>" + escapeHtml(condition) + "</td><td>" + post05Metric(item.metrics && item.metrics.dice) + "</td><td>" + post05Metric(post05Delta(current, condition, "dice")) + "</td><td>" + post05Metric(item.metrics && item.metrics.jaccard) + "</td><td>" + post05Metric(post05Delta(current, condition, "jaccard")) + "</td><td>" + post05Metric(item.metrics && item.metrics.boundary_f1) + "</td><td>" + post05Metric(post05Delta(current, condition, "boundary_f1")) + "</td><td>" + post05Metric(item.metrics && item.metrics.hd95_normalized) + "</td><td>" + post05Metric(post05Delta(current, condition, "hd95_normalized")) + "</td></tr>").join("");
+  const overlay = $("#post05-overlay-enabled").checked ? "<figure class='panel'><img src='/api/post05/overlay?condition=" + $("#post05-overlay-condition").value + "&method_id=" + current.method_id + "&image_id=" + encodeURIComponent(current.image_id) + "&v=" + Date.now() + "' alt='Overlay visual'></figure>" : "";
+  const reviewed = state.post05.observations.latest && state.post05.observations.latest[current.method_id + "::" + current.image_id];
+  $("#post05-case").innerHTML = "<h3>" + escapeHtml(current.method_id) + " · " + escapeHtml(current.image_id) + " · " + (reviewed ? "REVISADO" : "PENDIENTE") + "</h3><div class='artifact-grid'>" + resultPanel("Ground truth", full.artifacts && full.artifacts["ground_truth.png"], "Ground truth") + cards + overlay + "</div><div class='table-wrap'><table><thead><tr><th>Condición</th><th>Dice</th><th>Δ Dice</th><th>Jaccard</th><th>Δ Jaccard</th><th>Boundary-F1</th><th>Δ Boundary</th><th>HD95 norm. ↓</th><th>Δ HD95</th></tr></thead><tbody>" + metricRows + "</tbody></table></div><p class='notice'>Deltas = variante − FULL. Positivo mejora Dice/Jaccard/Boundary-F1; HD95 menor es mejor. Imagen SHA256: " + escapeHtml(full.hashes && full.hashes.image_sha256) + "</p>";
+}
+
+function loadPost05() {
+  state.post05.filteredCases = post05FilteredCases();
+  state.post05.index = Math.min(state.post05.index, Math.max(0, state.post05.filteredCases.length - 1));
+  $("#post05-view").hidden = false;
+  renderPost05Case();
+}
+
+async function savePost05Observation() {
+  const current = (state.post05.filteredCases || [])[state.post05.index], actor = $("#post05-actor").value.trim();
+  if (!current || !actor || !$("#post05-note").value.trim()) throw new Error("Caso, identidad y nota son obligatorios");
+  const assessment = {fov_clipping_severity:Number($("#post05-fov-severity").value), postprocessing_damage_severity:Number($("#post05-post-severity").value), no_post_artifact_severity:Number($("#post05-no-post-severity").value), roi_yolo_issue:$("#post05-roi-issue").value, visual_preference:$("#post05-preference").value, general_status:$("#post05-general-status").value, note:$("#post05-note").value.trim()};
+  const response = await fetch("/api/post05/observation", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({actor, method_id:current.method_id, image_id:current.image_id, conditions:current.conditions, assessment})});
+  const payload = await response.json(); if (!response.ok) throw new Error(payload.error || "No se pudo guardar la observación");
+  state.post05.observations.latest[current.method_id + "::" + current.image_id] = payload.saved;
+  state.post05.observations.reviewed = Object.keys(state.post05.observations.latest).length;
+  $("#post05-status").textContent = "Revisados: " + state.post05.observations.reviewed + " / " + state.post05.cases.length + " · schema 2 guardado.";
+  renderPost05Case();
 }
 
 function outcomeLabel(item) {
@@ -297,7 +381,7 @@ async function initialize() {
   const response = await fetch("/api/state");
   Object.assign(state, await response.json());
   renderModels(); renderImages(true); renderBenchmarkState(); updateCounts();
-  await Promise.all([loadRunIndex(), initializeAnnotations()]);
+  await Promise.all([loadRunIndex(), initializeAnnotations(), initializePost05()]);
 }
 
 document.querySelectorAll(".tab").forEach((button) => button.addEventListener("click", () => selectTab(button.dataset.tab)));
@@ -319,6 +403,21 @@ $("#result-model").addEventListener("change", (event) => { state.activeModelId =
 $("#load-common-run").addEventListener("click", () => loadSelectedRun("#common-run", "#common-run-view").catch((error) => { $("#common-run-view").textContent = error.message; }));
 $("#load-native-run").addEventListener("click", () => loadSelectedRun("#native-run", "#native-run-view").catch((error) => { $("#native-run-view").textContent = error.message; }));
 $("#load-ablation-run").addEventListener("click", () => loadSelectedRun("#ablation-run", "#ablation-run-view").catch((error) => { $("#ablation-run-view").textContent = error.message; }));
+$("#post05-load").addEventListener("click", () => loadPost05().catch((error) => { $("#post05-status").textContent = error.message; }));
+$("#post05-sort").addEventListener("change", () => { if (state.post05.cases.length) loadPost05().catch((error) => { $("#post05-status").textContent = error.message; }); });
+$("#post05-min-delta").addEventListener("change", () => { if (state.post05.cases.length) loadPost05().catch((error) => { $("#post05-status").textContent = error.message; }); });
+$("#post05-method").addEventListener("change", focusPost05Selection);
+$("#post05-image").addEventListener("change", focusPost05Selection);
+$("#post05-reviewed").addEventListener("change", loadPost05);
+$("#post05-review-filter").addEventListener("change", loadPost05);
+$("#post05-toggle-B1_NO_HAIR").addEventListener("change", renderPost05Case);
+$("#post05-toggle-B1_NO_YOLO").addEventListener("change", renderPost05Case);
+$("#post05-overlay-enabled").addEventListener("change", renderPost05Case);
+$("#post05-overlay-condition").addEventListener("change", renderPost05Case);
+$("#post05-previous").addEventListener("click", () => { state.post05.index -= 1; renderPost05Case(); });
+$("#post05-next").addEventListener("click", () => { state.post05.index += 1; renderPost05Case(); });
+$("#post05-next-pending").addEventListener("click", () => { const latest = state.post05.observations.latest || {}; const index = (state.post05.filteredCases || []).findIndex((item) => !latest[item.method_id + "::" + item.image_id]); if (index >= 0) { state.post05.index = index; renderPost05Case(); } });
+$("#post05-save").addEventListener("click", () => savePost05Observation().catch((error) => { $("#post05-status").textContent = error.message; }));
 $("#annotation-image").addEventListener("change", annotationImageChanged);
 $("#annotation-mask").addEventListener("pointerdown", (event) => { annotationDrawing = true; event.target.setPointerCapture(event.pointerId); drawAnnotation(event); });
 $("#annotation-mask").addEventListener("pointermove", drawAnnotation);

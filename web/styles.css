@@ -72,4 +72,8 @@ th { color:var(--muted); font-size:.72rem; text-transform:uppercase; letter-spac
 .artifact-grid .panel img { aspect-ratio:auto; max-height:360px; }
 .annotation-canvases { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
 .annotation-canvases canvas { width:100%; height:auto; max-height:520px; object-fit:contain; border:1px solid var(--line); border-radius:10px; background:#111; touch-action:none; }
+.post05-observation { padding:14px; background:var(--soft); border-radius:10px; }
+.post05-metrics { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:8px; margin:14px 0; }
+.post05-metrics article { padding:12px; border:1px solid var(--line); border-radius:8px; background:white; }
+.post05-metrics small { display:block; color:var(--muted); }
 @media (max-width:760px) { .annotation-canvases { grid-template-columns:1fr; } }
